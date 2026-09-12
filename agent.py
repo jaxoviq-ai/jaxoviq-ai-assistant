@@ -2059,20 +2059,12 @@ with st.sidebar:
 # ============================================================
 
 st.markdown(
-    """
-    <div class="jaxoviq-hero">
-        <div class="jaxoviq-title">
-            ⚡ JAXOVIQ AI Assistant
-        </div>
-
-        <div class="jaxoviq-subtitle">
-            Search, analyze and understand your documents with grounded AI.
-        </div>
-    </div>
-    """,
+    '<div class="jaxoviq-hero">'
+    '<div class="jaxoviq-title">⚡ JAXOVIQ AI Assistant</div>'
+    '<div class="jaxoviq-subtitle">Search, analyze and understand your documents with grounded AI.</div>'
+    '</div>',
     unsafe_allow_html=True,
 )
-
 
 # ============================================================
 # TOP DASHBOARD
