@@ -1935,7 +1935,7 @@ with st.sidebar:
         accept_multiple_files=True,
     )
 
-    if uploaded_files:
+   if uploaded_files:
         current_files = [f.name for f in uploaded_files]
 
         if st.session_state.get("last_uploaded_files") != current_files:
@@ -1943,6 +1943,8 @@ with st.sidebar:
             stats["pdf_uploads"] += len(uploaded_files)
             save_stats(stats)
             st.session_state.last_uploaded_files = current_files
+
+    document_options = [
         "All Documents"
     ]
 
