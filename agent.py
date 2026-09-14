@@ -1914,20 +1914,18 @@ with st.expander("🔒 Admin Usage Stats"):
             st.metric("Questions", stats.get("questions", 0))
         elif admin_password:
             st.error("Wrong password")  
-        if st.session_state.knowledge_base_ready:
-            st.success(
-                "● Knowledge Base Active"
-            )
-
-        else:
-            st.warning(
-                "● Knowledge Base Not Built"
-            )
+     if st.session_state.knowledge_base_ready:
+        st.success(
+            "● Knowledge Base Active"
+        )
+    else:
+        st.warning(
+            "● Knowledge Base Not Built"
+        )
 
     st.subheader(
         "📚 Documents"
     )
-
     uploaded_files = st.file_uploader(
         "Upload PDF files",
         type=["pdf"],
