@@ -1935,7 +1935,7 @@ with st.sidebar:
         accept_multiple_files=True,
     )
 
-   if uploaded_files:
+    if uploaded_files:
         current_files = [f.name for f in uploaded_files]
 
         if st.session_state.get("last_uploaded_files") != current_files:
@@ -1952,7 +1952,6 @@ with st.sidebar:
         document_options += (
             st.session_state.pdf_names
         )
-
     elif uploaded_files:
         document_options += [
             file.name
