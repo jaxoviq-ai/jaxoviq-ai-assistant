@@ -1933,7 +1933,7 @@ with st.sidebar:
         type=["pdf"],
         accept_multiple_files=True,
     )
-    if uploaded_files:
+   if uploaded_files:
     current_files = [f.name for f in uploaded_files]
 
     if st.session_state.get("last_uploaded_files") != current_files:
