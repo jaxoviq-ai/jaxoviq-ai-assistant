@@ -1915,9 +1915,9 @@ with st.expander("🔒 Admin Usage Stats"):
         elif admin_password:
             st.error("Wrong password")  
         if st.session_state.knowledge_base_ready:
-        st.success(
-            "● Knowledge Base Active"
-        )
+            st.success(
+                "● Knowledge Base Active"
+            )
 
         else:
         st.warning(
