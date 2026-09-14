@@ -1913,16 +1913,16 @@ with st.expander("🔒 Admin Usage Stats"):
             st.metric("PDF Uploads", stats.get("pdf_uploads", 0))
             st.metric("Questions", stats.get("questions", 0))
         elif admin_password:
-            st.error("Wrong password")
-    if st.session_state.knowledge_base_ready:
-        st.success(
-            "● Knowledge Base Active"
-        )
-
-    else:
-        st.warning(
-            "● Knowledge Base Not Built"
-        )
+            st.error("Wrong password")  
+                    if st.session_state.knowledge_base_ready:
+                st.success(
+                    "● Knowledge Base Active"
+                )
+        
+                else:
+                st.warning(
+                    "● Knowledge Base Not Built"
+                )
 
     st.subheader(
         "📚 Documents"
