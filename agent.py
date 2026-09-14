@@ -2,6 +2,7 @@ import io
 import json
 import time
 import html
+import os 
 from pathlib import Path
 
 import faiss
@@ -34,6 +35,31 @@ from reportlab.platypus import (
 # ============================================================
 
 client = OpenAI()
+TRACK_FILE = "usage_stats.json"
+
+def load_stats():
+    if os.path.exists(TRACK_FILE):
+        try:
+            with open(TRACK_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
+
+    return {
+        "app_opens": 0,
+        "pdf_uploads": 0,
+        "questions": 0
+    }
+
+def save_stats(stats):
+    with open(TRACK_FILE, "w") as f:
+        json.dump(stats, f)
+
+if "usage_counted" not in st.session_state:
+    stats = load_stats()
+    stats["app_opens"] += 1
+    save_stats(stats)
+    st.session_state.usage_counted = True
 
 MIN_SCORE = 0.30
 MEDIUM_SCORE = 0.45
@@ -1874,7 +1900,20 @@ with st.sidebar:
     )
 
     st.divider()
+with st.expander("🔒 Admin Usage Stats"):
+        admin_password = st.text_input(
+            "Admin password",
+            type="password",
+            key="stats_admin_password"
+        )
 
+        if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
+            stats = load_stats()
+            st.metric("App Opens", stats.get("app_opens", 0))
+            st.metric("PDF Uploads", stats.get("pdf_uploads", 0))
+            st.metric("Questions", stats.get("questions", 0))
+        elif admin_password:
+            st.error("Wrong password")
     if st.session_state.knowledge_base_ready:
         st.success(
             "● Knowledge Base Active"
@@ -1894,7 +1933,14 @@ with st.sidebar:
         type=["pdf"],
         accept_multiple_files=True,
     )
+    if uploaded_files:
+    current_files = [f.name for f in uploaded_files]
 
+    if st.session_state.get("last_uploaded_files") != current_files:
+        stats = load_stats()
+        stats["pdf_uploads"] += len(uploaded_files)
+        save_stats(stats)
+        st.session_state.last_uploaded_files = current_files
     document_options = [
         "All Documents"
     ]
@@ -2595,6 +2641,9 @@ elif typed_question:
 # ============================================================
 
 if question:
+    stats = load_stats()
+    stats["questions"] += 1
+    save_stats(stats)
 
     if not st.session_state.knowledge_base_ready:
         st.warning(
