@@ -1924,8 +1924,7 @@ with st.sidebar:
         st.warning(
             "● Knowledge Base Not Built"
         )
-
-   st.subheader(
+st.subheader(
         "📚 Documents"
     )
 
