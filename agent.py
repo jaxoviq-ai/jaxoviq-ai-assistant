@@ -1920,9 +1920,9 @@ with st.expander("🔒 Admin Usage Stats"):
             )
 
         else:
-        st.warning(
-            "● Knowledge Base Not Built"
-        )
+            st.warning(
+                "● Knowledge Base Not Built"
+            )
 
     st.subheader(
         "📚 Documents"
