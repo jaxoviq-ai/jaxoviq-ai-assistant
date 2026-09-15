@@ -49,6 +49,9 @@ def load_stats():
         "app_opens": 0,
         "pdf_uploads": 0,
         "questions": 0
+        "meta_visits": 0,
+        "linkedin_visits": 0,
+        "instagram_visits": 0,
     }
 
 def save_stats(stats):
@@ -58,6 +61,14 @@ def save_stats(stats):
 if "usage_counted" not in st.session_state:
     stats = load_stats()
     stats["app_opens"] += 1
+    source = str(st.query_params.get("source", "")).lower().strip()
+
+    if source == "meta":
+        stats["meta_visits"] = stats.get("meta_visits", 0) + 1
+    elif source == "linkedin":
+        stats["linkedin_visits"] = stats.get("linkedin_visits", 0) + 1
+    elif source == "instagram":
+        stats["instagram_visits"] = stats.get("instagram_visits", 0) + 1
     save_stats(stats)
     st.session_state.usage_counted = True
 
