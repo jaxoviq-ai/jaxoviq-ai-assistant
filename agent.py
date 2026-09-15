@@ -1909,6 +1909,10 @@ with st.sidebar:
 
         if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
             stats = load_stats()
+            st.write("Traffic Sources")
+            st.write("Meta:", stats.get("meta_visits", 0))
+            st.write("LinkedIn:", stats.get("linkedin_visits", 0))
+            st.write("Instagram:", stats.get("instagram_visits", 0))
             st.metric("App Opens", stats.get("app_opens", 0))
             st.metric("PDF Uploads", stats.get("pdf_uploads", 0))
             st.metric("Questions", stats.get("questions", 0))
