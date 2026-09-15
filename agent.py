@@ -48,7 +48,7 @@ def load_stats():
     return {
         "app_opens": 0,
         "pdf_uploads": 0,
-        "questions": 0
+        "questions": 0,
         "meta_visits": 0,
         "linkedin_visits": 0,
         "instagram_visits": 0,
