@@ -2631,7 +2631,28 @@ for message in st.session_state.messages:
                 f'{message["score"]:.3f}'
             )
 
+# ---------------- FEEDBACK ----------------
+with st.expander("💬 Give Feedback"):
+    feedback_rating = st.radio(
+        "Was JAXOVIQ helpful?",
+        ["👍 Yes", "😐 Partly", "👎 No"],
+        horizontal=True
+    )
 
+    feedback_comment = st.text_area(
+        "Tell us what we can improve:",
+        placeholder="Write your feedback here..."
+    )
+
+    if st.button("Submit Feedback"):
+        from datetime import datetime
+
+        with open("feedback.txt", "a", encoding="utf-8") as f:
+            f.write(
+                f"{datetime.now()} | {feedback_rating} | {feedback_comment}\n"
+            )
+
+        st.success("Thank you! Your feedback has been submitted. 🙏")
 typed_question = st.chat_input(
     "Ask a question about your PDFs..."
 )
