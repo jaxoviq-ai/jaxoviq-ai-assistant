@@ -2711,9 +2711,9 @@ elif typed_question:
 # ============================================================
 
 if question:
-stats = load_stats()
-    stats["questions"] += 1
-    save_stats(stats)
+   stats = load_stats()
+   stats["questions"] += 1
+   save_stats(stats)
 
     if not st.session_state.knowledge_base_ready:
         st.warning(
@@ -2721,7 +2721,6 @@ stats = load_stats()
         )
 
     else:
-
         with st.spinner(
             "Understanding your question..."
         ):
