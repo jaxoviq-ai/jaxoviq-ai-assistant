@@ -1918,13 +1918,13 @@ with st.sidebar:
 
     st.divider()
     with st.expander("🔐 Admin Usage Stats"):
-    admin_password = st.text_input(
+        admin_password = st.text_input(
         "Admin password",
         type="password",
         key="stats_admin_password",
     )
 
-    if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
+        if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
         stats = load_stats()
 
         admin_mode = st.checkbox(
