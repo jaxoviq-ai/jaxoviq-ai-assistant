@@ -2719,7 +2719,6 @@ if question:
         st.warning(
             "Please build the knowledge base first."
         )
-
     else:
         with st.spinner(
             "Understanding your question..."
