@@ -1917,7 +1917,7 @@ with st.sidebar:
     )
 
     st.divider()
-with st.expander("🔐 Admin Usage Stats"):
+    with st.expander("🔐 Admin Usage Stats"):
     admin_password = st.text_input(
         "Admin password",
         type="password",
