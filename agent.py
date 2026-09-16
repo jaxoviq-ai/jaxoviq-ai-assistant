@@ -46,13 +46,13 @@ def load_stats():
         except:
             pass
 
-return {
-    "app_opens": 0,
-    "pdf_uploads": 0,
-    "questions": 0,
-    "external_sessions": 0,
-    "admin_tests": 0,
-}
+    return {
+        "app_opens": 0,
+        "pdf_uploads": 0,
+        "questions": 0,
+        "external_sessions": 0,
+        "admin_tests": 0,
+    }
    
 def save_stats(stats):
     with open(TRACK_FILE, "w") as f:
