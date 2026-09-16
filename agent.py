@@ -1,8 +1,9 @@
 import io
 import json
 import time
+import os
+import uuid
 import html
-import os 
 from pathlib import Path
 
 import faiss
@@ -45,32 +46,35 @@ def load_stats():
         except:
             pass
 
-    return {
-        "app_opens": 0,
-        "pdf_uploads": 0,
-        "questions": 0,
-        "meta_visits": 0,
-        "linkedin_visits": 0,
-        "instagram_visits": 0,
-    }
-
+return {
+    "app_opens": 0,
+    "pdf_uploads": 0,
+    "questions": 0,
+    "external_sessions": 0,
+    "admin_tests": 0,
+}
+   
 def save_stats(stats):
     with open(TRACK_FILE, "w") as f:
         json.dump(stats, f)
 
 if "usage_counted" not in st.session_state:
     stats = load_stats()
-    stats["app_opens"] += 1
-    source = str(st.query_params.get("source", "")).lower().strip()
 
-    if source == "meta":
-        stats["meta_visits"] = stats.get("meta_visits", 0) + 1
-    elif source == "linkedin":
-        stats["linkedin_visits"] = stats.get("linkedin_visits", 0) + 1
-    elif source == "instagram":
-        stats["instagram_visits"] = stats.get("instagram_visits", 0) + 1
+    stats.setdefault("app_opens", 0)
+    stats.setdefault("pdf_uploads", 0)
+    stats.setdefault("questions", 0)
+    stats.setdefault("external_sessions", 0)
+    stats.setdefault("admin_tests", 0)
+
+    stats["app_opens"] += 1
+    stats["external_sessions"] += 1
+
     save_stats(stats)
+
     st.session_state.usage_counted = True
+    st.session_state.visitor_id = uuid.uuid4().hex[:8]
+    st.session_state.visitor_counted = True
 
 MIN_SCORE = 0.30
 MEDIUM_SCORE = 0.45
@@ -192,7 +196,9 @@ defaults = {
     "suggested_questions": [],
     "suggestions_scope": None,
     "pending_question": None,
-
+    "admin_test_mode": False,
+    "visitor_id": None,
+    "visitor_counted": False,
     "persistent_loaded": False,
 }
 
@@ -1900,6 +1906,7 @@ if (
 # ============================================================
 # SIDEBAR
 # ============================================================
+
 with st.sidebar:
     st.title(
         "⚡ JAXOVIQ"
@@ -1910,30 +1917,54 @@ with st.sidebar:
     )
 
     st.divider()
+with st.expander("🔐 Admin Usage Stats"):
+    admin_password = st.text_input(
+        "Admin password",
+        type="password",
+        key="stats_admin_password",
+    )
 
-    with st.expander("🔒 Admin Usage Stats"):
-        admin_password = st.text_input(
-            "Admin password",
-            type="password",
-            key="stats_admin_password"
+    if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
+        stats = load_stats()
+
+        admin_mode = st.checkbox(
+            "🧪 Admin Test Mode",
+            value=st.session_state.admin_test_mode,
         )
 
-        if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
-            stats = load_stats()
-            st.write("Traffic Sources")
-            st.write("Meta:", stats.get("meta_visits", 0))
-            st.write("LinkedIn:", stats.get("linkedin_visits", 0))
-            st.write("Instagram:", stats.get("instagram_visits", 0))
-            st.metric("App Opens", stats.get("app_opens", 0))
-            st.metric("PDF Uploads", stats.get("pdf_uploads", 0))
-            st.metric("Questions", stats.get("questions", 0))
-        elif admin_password:
-            st.error("Wrong password")
+        if admin_mode and not st.session_state.admin_test_mode:
+            stats.setdefault("external_sessions", 0)
+            stats.setdefault("admin_tests", 0)
 
+            if st.session_state.visitor_counted:
+                stats["external_sessions"] = max(
+                    0,
+                    stats["external_sessions"] - 1,
+                )
+                stats["admin_tests"] += 1
+                st.session_state.visitor_counted = False
+
+            save_stats(stats)
+            st.session_state.admin_test_mode = True
+
+        elif not admin_mode:
+            st.session_state.admin_test_mode = False
+
+        st.write("Traffic Sources")
+        st.write("Meta:", stats.get("meta_visits", 0))
+        st.write("LinkedIn:", stats.get("linkedin_visits", 0))
+        st.write("Instagram:", stats.get("instagram_visits", 0))
+        st.metric("App Opens", stats.get("app_opens", 0))
+        st.metric("PDF Uploads", stats.get("pdf_uploads", 0))
+        st.metric("Questions", stats.get("questions", 0))
+
+    elif admin_password:
+        st.error("Wrong password")
     if st.session_state.knowledge_base_ready:
         st.success(
             "● Knowledge Base Active"
         )
+
     else:
         st.warning(
             "● Knowledge Base Not Built"
@@ -1948,16 +1979,14 @@ with st.sidebar:
         type=["pdf"],
         accept_multiple_files=True,
     )
-
     if uploaded_files:
-        current_files = [f.name for f in uploaded_files]
+    current_files = [f.name for f in uploaded_files]
 
-        if st.session_state.get("last_uploaded_files") != current_files:
-            stats = load_stats()
-            stats["pdf_uploads"] += len(uploaded_files)
-            save_stats(stats)
-            st.session_state.last_uploaded_files = current_files
-
+    if st.session_state.get("last_uploaded_files") != current_files:
+        stats = load_stats()
+        stats["pdf_uploads"] += len(uploaded_files)
+        save_stats(stats)
+        st.session_state.last_uploaded_files = current_files
     document_options = [
         "All Documents"
     ]
@@ -1966,6 +1995,12 @@ with st.sidebar:
         document_options += (
             st.session_state.pdf_names
         )
+
+    elif uploaded_files:
+        document_options += [
+            file.name
+            for file in uploaded_files
+        ]
 
     selected_pdf = st.selectbox(
         "PDF Scope",
@@ -2653,6 +2688,9 @@ with st.expander("💬 Give Feedback"):
             )
 
         st.success("Thank you! Your feedback has been submitted. 🙏")
+
+
+
 typed_question = st.chat_input(
     "Ask a question about your PDFs..."
 )
@@ -2673,7 +2711,7 @@ elif typed_question:
 # ============================================================
 
 if question:
-    stats = load_stats()
+stats = load_stats()
     stats["questions"] += 1
     save_stats(stats)
 
