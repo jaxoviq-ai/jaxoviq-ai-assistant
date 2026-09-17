@@ -1917,7 +1917,7 @@ with st.sidebar:
     )
 
     st.divider()
-   with st.expander("🔐 Admin Usage Stats"):
+ with st.expander("🔐 Admin Usage Stats"):
         admin_password = st.text_input(
             "Admin password",
             type="password",
@@ -1960,6 +1960,7 @@ with st.sidebar:
 
         elif admin_password:
             st.error("Wrong password")
+
     if st.session_state.knowledge_base_ready:
         st.success(
             "● Knowledge Base Active"
