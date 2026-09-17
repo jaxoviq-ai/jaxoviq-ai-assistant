@@ -1924,42 +1924,42 @@ with st.sidebar:
         key="stats_admin_password",
     )
 
-        if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
-        stats = load_stats()
+if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
+            stats = load_stats()
 
-        admin_mode = st.checkbox(
-            "🧪 Admin Test Mode",
-            value=st.session_state.admin_test_mode,
-        )
+            admin_mode = st.checkbox(
+                "🧪 Admin Test Mode",
+                value=st.session_state.admin_test_mode,
+            )
 
-        if admin_mode and not st.session_state.admin_test_mode:
-            stats.setdefault("external_sessions", 0)
-            stats.setdefault("admin_tests", 0)
+            if admin_mode and not st.session_state.admin_test_mode:
+                stats.setdefault("external_sessions", 0)
+                stats.setdefault("admin_tests", 0)
 
-            if st.session_state.visitor_counted:
-                stats["external_sessions"] = max(
-                    0,
-                    stats["external_sessions"] - 1,
-                )
-                stats["admin_tests"] += 1
-                st.session_state.visitor_counted = False
+                if st.session_state.visitor_counted:
+                    stats["external_sessions"] = max(
+                        0,
+                        stats["external_sessions"] - 1,
+                    )
+                    stats["admin_tests"] += 1
+                    st.session_state.visitor_counted = False
 
-            save_stats(stats)
-            st.session_state.admin_test_mode = True
+                save_stats(stats)
+                st.session_state.admin_test_mode = True
 
-        elif not admin_mode:
-            st.session_state.admin_test_mode = False
+            elif not admin_mode:
+                st.session_state.admin_test_mode = False
 
-        st.write("Traffic Sources")
-        st.write("Meta:", stats.get("meta_visits", 0))
-        st.write("LinkedIn:", stats.get("linkedin_visits", 0))
-        st.write("Instagram:", stats.get("instagram_visits", 0))
-        st.metric("App Opens", stats.get("app_opens", 0))
-        st.metric("PDF Uploads", stats.get("pdf_uploads", 0))
-        st.metric("Questions", stats.get("questions", 0))
+            st.write("Traffic Sources")
+            st.write("Meta:", stats.get("meta_visits", 0))
+            st.write("LinkedIn:", stats.get("linkedin_visits", 0))
+            st.write("Instagram:", stats.get("instagram_visits", 0))
+            st.metric("App Opens", stats.get("app_opens", 0))
+            st.metric("PDF Uploads", stats.get("pdf_uploads", 0))
+            st.metric("Questions", stats.get("questions", 0))
 
-    elif admin_password:
-        st.error("Wrong password")
+        elif admin_password:
+            st.error("Wrong password")
     if st.session_state.knowledge_base_ready:
         st.success(
             "● Knowledge Base Active"
