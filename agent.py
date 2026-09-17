@@ -1,8 +1,6 @@
 import io
 import json
 import time
-import os
-import uuid
 import html
 from pathlib import Path
 
@@ -33,48 +31,10 @@ from reportlab.platypus import (
 # ============================================================
 # JAXOVIQ AI ASSISTANT
 # Professional Multi-PDF RAG Assistant
+# Client Demo Edition
 # ============================================================
 
 client = OpenAI()
-TRACK_FILE = "usage_stats.json"
-
-def load_stats():
-    if os.path.exists(TRACK_FILE):
-        try:
-            with open(TRACK_FILE, "r") as f:
-                return json.load(f)
-        except:
-            pass
-
-    return {
-        "app_opens": 0,
-        "pdf_uploads": 0,
-        "questions": 0,
-        "external_sessions": 0,
-        "admin_tests": 0,
-    }
-   
-def save_stats(stats):
-    with open(TRACK_FILE, "w") as f:
-        json.dump(stats, f)
-
-if "usage_counted" not in st.session_state:
-    stats = load_stats()
-
-    stats.setdefault("app_opens", 0)
-    stats.setdefault("pdf_uploads", 0)
-    stats.setdefault("questions", 0)
-    stats.setdefault("external_sessions", 0)
-    stats.setdefault("admin_tests", 0)
-
-    stats["app_opens"] += 1
-    stats["external_sessions"] += 1
-
-    save_stats(stats)
-
-    st.session_state.usage_counted = True
-    st.session_state.visitor_id = uuid.uuid4().hex[:8]
-    st.session_state.visitor_counted = True
 
 MIN_SCORE = 0.30
 MEDIUM_SCORE = 0.45
@@ -82,6 +42,10 @@ HIGH_SCORE = 0.60
 
 TOP_K = 8
 RERANK_TOP_N = 4
+
+# Keep only evidence close enough to the strongest retrieved result.
+# This reduces weak / unrelated source clutter in client demos.
+SOURCE_SCORE_GAP = 0.12
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 AI_MODEL = "gpt-5.6-luna"
@@ -107,6 +71,7 @@ st.set_page_config(
     page_title="JAXOVIQ AI Assistant",
     page_icon="⚡",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -118,7 +83,7 @@ st.markdown(
     """
     <style>
     .block-container {
-        padding-top: 1.4rem;
+        padding-top: 1.2rem;
         padding-bottom: 3rem;
         max-width: 1450px;
     }
@@ -128,22 +93,55 @@ st.markdown(
     }
 
     .jaxoviq-hero {
-        padding: 1.4rem 1.5rem;
+        padding: 1.6rem 1.7rem;
         border: 1px solid rgba(128,128,128,0.22);
-        border-radius: 18px;
+        border-radius: 20px;
         margin-bottom: 1rem;
+        background: linear-gradient(
+            135deg,
+            rgba(127, 90, 240, 0.12),
+            rgba(0, 180, 216, 0.08)
+        );
+    }
+
+    .jaxoviq-eyebrow {
+        font-size: 0.82rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        opacity: 0.7;
+        margin-bottom: 0.35rem;
     }
 
     .jaxoviq-title {
-        font-size: 2.25rem;
-        font-weight: 800;
+        font-size: 2.45rem;
+        font-weight: 850;
         margin: 0;
+        line-height: 1.05;
     }
 
     .jaxoviq-subtitle {
-        font-size: 1rem;
-        opacity: 0.75;
-        margin-top: 0.35rem;
+        font-size: 1.03rem;
+        opacity: 0.82;
+        margin-top: 0.55rem;
+        max-width: 900px;
+    }
+
+    .jaxoviq-usecase {
+        border: 1px solid rgba(128,128,128,0.20);
+        border-radius: 14px;
+        padding: 0.9rem 1rem;
+        min-height: 120px;
+    }
+
+    .jaxoviq-usecase-title {
+        font-weight: 800;
+        margin-bottom: 0.25rem;
+    }
+
+    .jaxoviq-usecase-text {
+        opacity: 0.78;
+        font-size: 0.93rem;
     }
 
     div[data-testid="stMetric"] {
@@ -160,6 +158,15 @@ st.markdown(
 
     div[data-testid="stExpander"] {
         border-radius: 12px;
+    }
+
+    .demo-note {
+        padding: 0.8rem 1rem;
+        border-left: 4px solid rgba(127, 90, 240, 0.75);
+        background: rgba(127, 90, 240, 0.07);
+        border-radius: 8px;
+        margin: 0.65rem 0 1rem 0;
+        font-size: 0.93rem;
     }
     </style>
     """,
@@ -196,9 +203,15 @@ defaults = {
     "suggested_questions": [],
     "suggestions_scope": None,
     "pending_question": None,
-    "admin_test_mode": False,
-    "visitor_id": None,
-    "visitor_counted": False,
+
+    # Business analysis tools
+    "comparison_result": None,
+    "comparison_pair": None,
+    "risk_check_result": None,
+    "risk_check_scope": None,
+    "deadline_result": None,
+    "deadline_scope": None,
+
     "persistent_loaded": False,
 }
 
@@ -218,13 +231,11 @@ def get_embedding(text):
                 model=EMBEDDING_MODEL,
                 input=text,
             )
-
             return response.data[0].embedding
 
         except Exception as e:
             if attempt < 3:
                 time.sleep(2)
-
             else:
                 st.error(f"Embedding error: {e}")
                 return None
@@ -243,13 +254,11 @@ def ask_model(prompt):
                     }
                 ],
             )
-
             return response.choices[0].message.content
 
         except Exception as e:
             if attempt < 3:
                 time.sleep(2)
-
             else:
                 st.error(f"AI error: {e}")
                 return None
@@ -271,14 +280,8 @@ def get_recent_conversation(max_messages=6):
         role = message.get("role", "user")
         content = message.get("content", "")
 
-        if role == "user":
-            speaker = "USER"
-        else:
-            speaker = "JAXOVIQ"
-
-        lines.append(
-            f"{speaker}: {content}"
-        )
+        speaker = "USER" if role == "user" else "JAXOVIQ"
+        lines.append(f"{speaker}: {content}")
 
     return "\n".join(lines)
 
@@ -353,27 +356,16 @@ STANDALONE QUESTION:
 # PERSISTENT KNOWLEDGE BASE
 # ============================================================
 
-def save_persistent_knowledge_base(
-    index,
-    chunks,
-    pdf_names,
-):
+def save_persistent_knowledge_base(index, chunks, pdf_names):
     try:
-        DATA_DIR.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
 
         faiss.write_index(
             index,
             str(INDEX_FILE),
         )
 
-        with open(
-            CHUNKS_FILE,
-            "w",
-            encoding="utf-8",
-        ) as file:
+        with open(CHUNKS_FILE, "w", encoding="utf-8") as file:
             json.dump(
                 chunks,
                 file,
@@ -381,11 +373,7 @@ def save_persistent_knowledge_base(
                 indent=2,
             )
 
-        with open(
-            META_FILE,
-            "w",
-            encoding="utf-8",
-        ) as file:
+        with open(META_FILE, "w", encoding="utf-8") as file:
             json.dump(
                 {
                     "pdf_names": pdf_names,
@@ -414,32 +402,16 @@ def load_persistent_knowledge_base():
         return None
 
     try:
-        index = faiss.read_index(
-            str(INDEX_FILE)
-        )
+        index = faiss.read_index(str(INDEX_FILE))
 
-        with open(
-            CHUNKS_FILE,
-            "r",
-            encoding="utf-8",
-        ) as file:
+        with open(CHUNKS_FILE, "r", encoding="utf-8") as file:
             chunks = json.load(file)
 
-        with open(
-            META_FILE,
-            "r",
-            encoding="utf-8",
-        ) as file:
+        with open(META_FILE, "r", encoding="utf-8") as file:
             metadata = json.load(file)
 
-        pdf_names = metadata.get(
-            "pdf_names",
-            [],
-        )
-
-        saved_model = metadata.get(
-            "embedding_model"
-        )
+        pdf_names = metadata.get("pdf_names", [])
+        saved_model = metadata.get("embedding_model")
 
         if saved_model != EMBEDDING_MODEL:
             return None
@@ -458,17 +430,10 @@ def load_persistent_knowledge_base():
 
 
 def delete_persistent_knowledge_base():
-    files = [
-        INDEX_FILE,
-        CHUNKS_FILE,
-        META_FILE,
-    ]
-
-    for file_path in files:
+    for file_path in [INDEX_FILE, CHUNKS_FILE, META_FILE]:
         try:
             if file_path.exists():
                 file_path.unlink()
-
         except Exception:
             pass
 
@@ -482,15 +447,9 @@ def read_uploaded_pdf(uploaded_file):
 
     try:
         pdf_bytes = uploaded_file.getvalue()
+        reader = PdfReader(io.BytesIO(pdf_bytes))
 
-        reader = PdfReader(
-            io.BytesIO(pdf_bytes)
-        )
-
-        for page_number, page in enumerate(
-            reader.pages,
-            start=1,
-        ):
+        for page_number, page in enumerate(reader.pages, start=1):
             text = page.extract_text()
 
             if text and text.strip():
@@ -505,18 +464,11 @@ def read_uploaded_pdf(uploaded_file):
         return pages
 
     except Exception as e:
-        st.error(
-            f"Could not read {uploaded_file.name}: {e}"
-        )
-
+        st.error(f"Could not read {uploaded_file.name}: {e}")
         return []
 
 
-def chunk_pages(
-    pages,
-    chunk_size=1000,
-    overlap=150,
-):
+def chunk_pages(pages, chunk_size=1000, overlap=150):
     chunks = []
 
     for page in pages:
@@ -525,10 +477,7 @@ def chunk_pages(
 
         while start < len(text):
             end = start + chunk_size
-
-            chunk_text = text[
-                start:end
-            ].strip()
+            chunk_text = text[start:end].strip()
 
             if chunk_text:
                 chunks.append(
@@ -551,13 +500,8 @@ def build_faiss_index(uploaded_files):
     all_chunks = []
 
     for uploaded_file in uploaded_files:
-        pages = read_uploaded_pdf(
-            uploaded_file
-        )
-
-        all_chunks.extend(
-            chunk_pages(pages)
-        )
+        pages = read_uploaded_pdf(uploaded_file)
+        all_chunks.extend(chunk_pages(pages))
 
     if not all_chunks:
         return None, None
@@ -569,48 +513,28 @@ def build_faiss_index(uploaded_files):
 
     total = len(all_chunks)
 
-    for i, chunk in enumerate(
-        all_chunks,
-        start=1,
-    ):
-        status.write(
-            f"Creating embeddings... {i}/{total}"
-        )
+    for i, chunk in enumerate(all_chunks, start=1):
+        status.write(f"Creating embeddings... {i}/{total}")
 
-        embedding = get_embedding(
-            chunk["text"]
-        )
+        embedding = get_embedding(chunk["text"])
 
         if embedding is None:
             progress.empty()
             status.empty()
-
             return None, None
 
-        embeddings.append(
-            embedding
-        )
-
-        progress.progress(
-            i / total
-        )
+        embeddings.append(embedding)
+        progress.progress(i / total)
 
     vectors = np.array(
         embeddings,
         dtype="float32",
     )
 
-    faiss.normalize_L2(
-        vectors
-    )
+    faiss.normalize_L2(vectors)
 
-    index = faiss.IndexFlatIP(
-        vectors.shape[1]
-    )
-
-    index.add(
-        vectors
-    )
+    index = faiss.IndexFlatIP(vectors.shape[1])
+    index.add(vectors)
 
     progress.empty()
     status.empty()
@@ -647,19 +571,14 @@ def get_document_stats():
             }
 
         stats[file_name]["chunks"] += 1
-
-        stats[file_name]["pages"].add(
-            page_number
-        )
+        stats[file_name]["pages"].add(page_number)
 
     final_stats = {}
 
     for file_name, data in stats.items():
         final_stats[file_name] = {
             "chunks": data["chunks"],
-            "pages": len(
-                data["pages"]
-            ),
+            "pages": len(data["pages"]),
         }
 
     return final_stats
@@ -669,12 +588,8 @@ def get_document_stats():
 # SMART SUGGESTED QUESTIONS
 # ============================================================
 
-def generate_suggested_questions(
-    selected_pdf="All Documents",
-):
-    scoped_chunks = get_scoped_chunks(
-        selected_pdf
-    )
+def generate_suggested_questions(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
 
     if not scoped_chunks:
         return []
@@ -734,37 +649,18 @@ PDF CONTENT:
         cleaned = result.strip()
 
         if cleaned.startswith("```"):
-            cleaned = cleaned.replace(
-                "```json",
-                "",
-            )
-
-            cleaned = cleaned.replace(
-                "```",
-                "",
-            )
-
+            cleaned = cleaned.replace("```json", "")
+            cleaned = cleaned.replace("```", "")
             cleaned = cleaned.strip()
 
-        data = json.loads(
-            cleaned
-        )
-
-        questions = data.get(
-            "questions",
-            [],
-        )
+        data = json.loads(cleaned)
+        questions = data.get("questions", [])
 
         final_questions = []
 
         for question in questions:
-            if (
-                isinstance(question, str)
-                and question.strip()
-            ):
-                final_questions.append(
-                    question.strip()
-                )
+            if isinstance(question, str) and question.strip():
+                final_questions.append(question.strip())
 
             if len(final_questions) >= 5:
                 break
@@ -779,19 +675,14 @@ PDF CONTENT:
 # RETRIEVAL
 # ============================================================
 
-def retrieve_chunks(
-    question,
-    selected_pdf="All Documents",
-):
+def retrieve_chunks(question, selected_pdf="All Documents"):
     if (
         st.session_state.index is None
         or not st.session_state.chunks
     ):
         return [], 0.0
 
-    query_embedding = get_embedding(
-        question
-    )
+    query_embedding = get_embedding(question)
 
     if query_embedding is None:
         return [], 0.0
@@ -801,20 +692,15 @@ def retrieve_chunks(
         dtype="float32",
     )
 
-    faiss.normalize_L2(
-        query_vector
-    )
+    faiss.normalize_L2(query_vector)
 
     chunks = st.session_state.chunks
     index = st.session_state.index
 
     if selected_pdf == "All Documents":
-        k = min(
-            TOP_K,
-            len(chunks),
-        )
-
+        k = min(TOP_K, len(chunks))
     else:
+        # Search enough rows to find chunks from the selected file.
         k = len(chunks)
 
     scores, indices = index.search(
@@ -825,26 +711,19 @@ def retrieve_chunks(
     candidates = []
     filtered_scores = []
 
-    for score, chunk_index in zip(
-        scores[0],
-        indices[0],
-    ):
+    for score, chunk_index in zip(scores[0], indices[0]):
         score = float(score)
 
         if chunk_index < 0:
             continue
 
-        chunk = chunks[
-            chunk_index
-        ]
+        chunk = chunks[chunk_index]
 
         if selected_pdf != "All Documents":
             if chunk["file"] != selected_pdf:
                 continue
 
-        filtered_scores.append(
-            score
-        )
+        filtered_scores.append(score)
 
         if score >= MIN_SCORE:
             candidates.append(
@@ -854,11 +733,7 @@ def retrieve_chunks(
                 }
             )
 
-    best_score = (
-        max(filtered_scores)
-        if filtered_scores
-        else 0.0
-    )
+    best_score = max(filtered_scores) if filtered_scores else 0.0
 
     return candidates, best_score
 
@@ -884,19 +759,13 @@ def get_confidence_label(score):
 # RERANKING
 # ============================================================
 
-def rerank_chunks(
-    question,
-    candidates,
-):
+def rerank_chunks(question, candidates):
     if len(candidates) <= 1:
         return candidates
 
     candidate_text = ""
 
-    for number, item in enumerate(
-        candidates,
-        start=1,
-    ):
+    for number, item in enumerate(candidates, start=1):
         chunk = item["chunk"]
 
         candidate_text += f"""
@@ -935,67 +804,36 @@ CANDIDATES:
 """
 
     try:
-        result = ask_model(
-            prompt
-        )
+        result = ask_model(prompt)
 
         if not result:
-            return candidates[
-                :RERANK_TOP_N
-            ]
+            return candidates[:RERANK_TOP_N]
 
         cleaned = result.strip()
 
         if cleaned.startswith("```"):
-            cleaned = cleaned.replace(
-                "```json",
-                "",
-            )
-
-            cleaned = cleaned.replace(
-                "```",
-                "",
-            )
-
+            cleaned = cleaned.replace("```json", "")
+            cleaned = cleaned.replace("```", "")
             cleaned = cleaned.strip()
 
-        data = json.loads(
-            cleaned
-        )
-
-        ranking = data.get(
-            "ranking",
-            [],
-        )
+        data = json.loads(cleaned)
+        ranking = data.get("ranking", [])
 
         reranked = []
 
         for number in ranking:
-            if not isinstance(
-                number,
-                int,
-            ):
+            if not isinstance(number, int):
                 continue
 
             position = number - 1
 
-            if (
-                0 <= position
-                < len(candidates)
-            ):
-                item = candidates[
-                    position
-                ]
+            if 0 <= position < len(candidates):
+                item = candidates[position]
 
                 if item not in reranked:
-                    reranked.append(
-                        item
-                    )
+                    reranked.append(item)
 
-            if (
-                len(reranked)
-                >= RERANK_TOP_N
-            ):
+            if len(reranked) >= RERANK_TOP_N:
                 break
 
         if reranked:
@@ -1004,9 +842,29 @@ CANDIDATES:
     except Exception:
         pass
 
-    return candidates[
-        :RERANK_TOP_N
+    return candidates[:RERANK_TOP_N]
+
+
+def filter_selected_evidence(selected, best_score):
+    """
+    Keep the strongest evidence and remove weak unrelated chunks.
+    This makes client-facing sources cleaner without changing retrieval.
+    """
+    if not selected:
+        return []
+
+    threshold = max(MIN_SCORE, best_score - SOURCE_SCORE_GAP)
+
+    filtered = [
+        item
+        for item in selected
+        if float(item["score"]) >= threshold
     ]
+
+    if filtered:
+        return filtered
+
+    return selected[:1]
 
 
 # ============================================================
@@ -1032,9 +890,7 @@ PAGE: {chunk["page"]}
 """
         )
 
-    context = "\n\n".join(
-        context_parts
-    )
+    context = "\n\n".join(context_parts)
 
     prompt = f"""
 You are JAXOVIQ, a professional PDF knowledge assistant.
@@ -1057,7 +913,8 @@ Rules:
 3. Do not invent facts.
 4. Use information from multiple PDFs if needed.
 5. Keep the answer concise but complete.
-6. If the answer is not clearly supported, say exactly:
+6. Prefer the most directly relevant source first.
+7. If the answer is not clearly supported, say exactly:
 
 "I could not find that information in the PDFs."
 
@@ -1074,21 +931,15 @@ PDF CONTEXT:
 {context}
 """
 
-    return ask_model(
-        prompt
-    )
+    return ask_model(prompt)
 
 
 # ============================================================
 # SUMMARY
 # ============================================================
 
-def generate_pdf_summary(
-    selected_pdf="All Documents",
-):
-    scoped_chunks = get_scoped_chunks(
-        selected_pdf
-    )
+def generate_pdf_summary(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
 
     if not scoped_chunks:
         return None
@@ -1130,21 +981,15 @@ PDF CONTENT:
 {combined_text}
 """
 
-    return ask_model(
-        prompt
-    )
+    return ask_model(prompt)
 
 
 # ============================================================
 # ACTION ITEMS
 # ============================================================
 
-def generate_action_items(
-    selected_pdf="All Documents",
-):
-    scoped_chunks = get_scoped_chunks(
-        selected_pdf
-    )
+def generate_action_items(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
 
     if not scoped_chunks:
         return None
@@ -1188,21 +1033,15 @@ PDF CONTENT:
 {context}
 """
 
-    return ask_model(
-        prompt
-    )
+    return ask_model(prompt)
 
 
 # ============================================================
 # INSIGHTS
 # ============================================================
 
-def generate_document_insights(
-    selected_pdf="All Documents",
-):
-    scoped_chunks = get_scoped_chunks(
-        selected_pdf
-    )
+def generate_document_insights(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
 
     if not scoped_chunks:
         return None
@@ -1252,35 +1091,222 @@ PDF CONTENT:
 {context}
 """
 
-    return ask_model(
-        prompt
+    return ask_model(prompt)
+
+
+# ============================================================
+# BUSINESS ANALYSIS TOOLS
+# ============================================================
+
+def _document_context_for_analysis(pdf_name, max_chunks=35):
+    """Build page-labelled context for one PDF from the existing KB."""
+    chunks = [
+        chunk
+        for chunk in st.session_state.chunks
+        if chunk["file"] == pdf_name
+    ]
+
+    if not chunks:
+        return ""
+
+    return "\n\n".join(
+        f"DOCUMENT: {chunk['file']}\nPAGE: {chunk['page']}\n\n{chunk['text']}"
+        for chunk in chunks[:max_chunks]
     )
+
+
+def compare_documents(pdf_a, pdf_b):
+    if not pdf_a or not pdf_b or pdf_a == pdf_b:
+        return None
+
+    context_a = _document_context_for_analysis(pdf_a)
+    context_b = _document_context_for_analysis(pdf_b)
+
+    if not context_a or not context_b:
+        return None
+
+    prompt = f"""
+You are JAXOVIQ, a professional business document comparison assistant.
+
+Compare DOCUMENT A and DOCUMENT B using ONLY the supplied content.
+Do not use outside knowledge and do not invent facts.
+
+Create these sections:
+
+# Document Comparison
+
+## Executive Summary
+Give a short factual overview of the most important differences.
+
+## Added or New Items
+List material items that appear in B but not A.
+
+## Removed Items
+List material items that appear in A but not B.
+
+## Changed Terms
+For every meaningful change, show:
+- Topic
+- Document A value/wording
+- Document B value/wording
+- Why the change matters operationally
+- Evidence with filename and page number
+
+## Dates, Numbers and Obligations Changed
+Highlight changed dates, amounts, notice periods, targets, benefits,
+responsibilities, deadlines or other measurable terms.
+
+## Unclear or Unverified Differences
+State anything that cannot be compared confidently from the supplied text.
+
+Rules:
+1. Be precise and neutral.
+2. If something is absent from the supplied text, say "Not found in supplied text".
+3. Never claim a legal conclusion.
+4. Cite filename and page for important findings.
+
+DOCUMENT A: {pdf_a}
+
+{context_a}
+
+DOCUMENT B: {pdf_b}
+
+{context_b}
+"""
+
+    return ask_model(prompt)
+
+
+def run_risk_check(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
+
+    if not scoped_chunks:
+        return None
+
+    context = "\n\n".join(
+        f"SOURCE PDF: {chunk['file']}\nPAGE: {chunk['page']}\n\n{chunk['text']}"
+        for chunk in scoped_chunks[:40]
+    )
+
+    prompt = f"""
+You are JAXOVIQ, a business document review assistant.
+
+Review ONLY the supplied document text for practical risks, ambiguities,
+missing information and obligations. This is a document review, NOT legal advice.
+Do not invent requirements that are not stated in the documents.
+
+Create these sections:
+
+# Contract / Policy Check
+
+## High Attention Items
+Material clauses or wording that may need human review.
+
+## Ambiguous or Unclear Wording
+Terms that are vague, incomplete, internally inconsistent or difficult to apply.
+
+## Important Obligations
+Who must do what, and when.
+
+## Missing or Not Found
+Only list common document information when its absence is genuinely relevant,
+and label it clearly as "Not found in supplied text" rather than saying it is legally required.
+
+## Dates and Renewal / Notice Terms
+Extract relevant effective dates, expiry dates, notice periods, renewals and deadlines.
+
+## Recommended Human Review
+Identify points that a manager, HR professional, accountant or qualified legal professional
+may want to verify, without giving legal advice.
+
+For each important finding include:
+- Finding
+- Attention level: High / Medium / Low
+- Source: filename and page
+- Short evidence
+
+DOCUMENT SCOPE: {selected_pdf}
+
+PDF CONTENT:
+
+{context}
+"""
+
+    return ask_model(prompt)
+
+
+def extract_deadlines_and_key_terms(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
+
+    if not scoped_chunks:
+        return None
+
+    context = "\n\n".join(
+        f"SOURCE PDF: {chunk['file']}\nPAGE: {chunk['page']}\n\n{chunk['text']}"
+        for chunk in scoped_chunks[:40]
+    )
+
+    prompt = f"""
+You are JAXOVIQ, a business document extraction assistant.
+
+Use ONLY the supplied PDF content. Do not calculate or invent dates or terms
+that are not supported by the text.
+
+Create these sections:
+
+# Deadlines & Key Terms
+
+## Critical Dates
+Use a Markdown table with columns:
+| Date / Period | Event or Obligation | Responsible Party | Source |
+
+## Notice, Renewal and Expiry
+Use a Markdown table with columns:
+| Term | Value | Source |
+
+## Money and Payment Terms
+Use a Markdown table with columns:
+| Item | Amount / Timing | Source |
+
+## Employment / Policy Terms
+Include leave, probation, working time, benefits, approvals or other policy terms when present.
+Use a Markdown table:
+| Topic | Key Term | Source |
+
+## Other Important Numbers
+Use a Markdown table:
+| Item | Value | Source |
+
+## Missing Dates or Owners
+List actions or obligations that appear to lack a clear date or responsible person.
+
+Always include filename and page number in Source.
+If a section has no supported information, write "No supported information found."
+
+DOCUMENT SCOPE: {selected_pdf}
+
+PDF CONTENT:
+
+{context}
+"""
+
+    return ask_model(prompt)
 
 
 # ============================================================
 # EVIDENCE VIEWER
 # ============================================================
 
-def clean_evidence_text(
-    text,
-    max_length=500,
-):
-    text = " ".join(
-        text.split()
-    )
+def clean_evidence_text(text, max_length=500):
+    text = " ".join(text.split())
 
     if len(text) > max_length:
-        return (
-            text[:max_length].rstrip()
-            + "..."
-        )
+        return text[:max_length].rstrip() + "..."
 
     return text
 
 
-def build_evidence_list(
-    selected_chunks,
-):
+def build_evidence_list(selected_chunks):
     evidence_list = []
     seen = set()
 
@@ -1296,29 +1322,21 @@ def build_evidence_list(
         if key in seen:
             continue
 
-        seen.add(
-            key
-        )
+        seen.add(key)
 
         evidence_list.append(
             {
                 "file": chunk["file"],
                 "page": chunk["page"],
-                "score": float(
-                    item["score"]
-                ),
-                "text": clean_evidence_text(
-                    chunk["text"]
-                ),
+                "score": float(item["score"]),
+                "text": clean_evidence_text(chunk["text"]),
             }
         )
 
     return evidence_list
 
 
-def display_evidence(
-    evidence_list,
-):
+def display_evidence(evidence_list):
     if not evidence_list:
         return
 
@@ -1326,52 +1344,26 @@ def display_evidence(
         "🔎 View Evidence",
         expanded=False,
     ):
-        for number, evidence in enumerate(
-            evidence_list,
-            start=1,
-        ):
-            st.markdown(
-                f"### Evidence {number}"
-            )
+        for number, evidence in enumerate(evidence_list, start=1):
+            st.markdown(f"### Evidence {number}")
 
-            c1, c2, c3 = st.columns(
-                3
-            )
+            c1, c2, c3 = st.columns(3)
 
             with c1:
-                st.caption(
-                    "PDF"
-                )
-
-                st.write(
-                    evidence["file"]
-                )
+                st.caption("PDF")
+                st.write(evidence["file"])
 
             with c2:
-                st.caption(
-                    "Page"
-                )
-
-                st.write(
-                    evidence["page"]
-                )
+                st.caption("Page")
+                st.write(evidence["page"])
 
             with c3:
-                st.caption(
-                    "Match"
-                )
+                st.caption("Match")
+                st.write(f'{evidence["score"]:.3f}')
 
-                st.write(
-                    f'{evidence["score"]:.3f}'
-                )
+            st.info(evidence["text"])
 
-            st.info(
-                evidence["text"]
-            )
-
-            if number < len(
-                evidence_list
-            ):
+            if number < len(evidence_list):
                 st.divider()
 
 
@@ -1422,9 +1414,7 @@ def build_export_report(
         "Generated by JAXOVIQ AI Assistant",
     ]
 
-    return "\n".join(
-        parts
-    )
+    return "\n".join(parts)
 
 
 # ============================================================
@@ -1435,60 +1425,33 @@ def clean_markdown_for_pdf(text):
     if not text:
         return ""
 
-    text = text.replace(
-        "**",
-        "",
-    )
-
-    text = text.replace(
-        "__",
-        "",
-    )
-
-    text = text.replace(
-        "`",
-        "",
-    )
+    text = text.replace("**", "")
+    text = text.replace("__", "")
+    text = text.replace("`", "")
 
     return text
 
 
-def add_text_to_pdf_story(
-    story,
-    text,
-    styles,
-):
+def add_text_to_pdf_story(story, text, styles):
     if not text:
         return
 
-    text = clean_markdown_for_pdf(
-        text
-    )
-
+    text = clean_markdown_for_pdf(text)
     lines = text.splitlines()
 
     for raw_line in lines:
         line = raw_line.strip()
 
         if not line:
-            story.append(
-                Spacer(
-                    1,
-                    3 * mm,
-                )
-            )
+            story.append(Spacer(1, 3 * mm))
             continue
 
-        safe_line = html.escape(
-            line
-        )
+        safe_line = html.escape(line)
 
         if line.startswith("### "):
             story.append(
                 Paragraph(
-                    html.escape(
-                        line[4:]
-                    ),
+                    html.escape(line[4:]),
                     styles["JAXHeading3"],
                 )
             )
@@ -1496,9 +1459,7 @@ def add_text_to_pdf_story(
         elif line.startswith("## "):
             story.append(
                 Paragraph(
-                    html.escape(
-                        line[3:]
-                    ),
+                    html.escape(line[3:]),
                     styles["JAXHeading2"],
                 )
             )
@@ -1506,21 +1467,13 @@ def add_text_to_pdf_story(
         elif line.startswith("# "):
             story.append(
                 Paragraph(
-                    html.escape(
-                        line[2:]
-                    ),
+                    html.escape(line[2:]),
                     styles["JAXHeading1"],
                 )
             )
 
-        elif (
-            line.startswith("- ")
-            or line.startswith("* ")
-        ):
-            bullet_text = html.escape(
-                line[2:]
-            )
-
+        elif line.startswith("- ") or line.startswith("* "):
+            bullet_text = html.escape(line[2:])
             story.append(
                 Paragraph(
                     f"• {bullet_text}",
@@ -1558,7 +1511,6 @@ def build_professional_pdf(
     )
 
     sample_styles = getSampleStyleSheet()
-
     styles = {}
 
     styles["JAXTitle"] = ParagraphStyle(
@@ -1569,9 +1521,7 @@ def build_professional_pdf(
         leading=30,
         alignment=TA_CENTER,
         spaceAfter=8 * mm,
-        textColor=colors.HexColor(
-            "#1F2937"
-        ),
+        textColor=colors.HexColor("#1F2937"),
     )
 
     styles["JAXSubtitle"] = ParagraphStyle(
@@ -1582,9 +1532,7 @@ def build_professional_pdf(
         leading=16,
         alignment=TA_CENTER,
         spaceAfter=6 * mm,
-        textColor=colors.HexColor(
-            "#4B5563"
-        ),
+        textColor=colors.HexColor("#4B5563"),
     )
 
     styles["JAXHeading1"] = ParagraphStyle(
@@ -1595,9 +1543,7 @@ def build_professional_pdf(
         leading=22,
         spaceBefore=6 * mm,
         spaceAfter=4 * mm,
-        textColor=colors.HexColor(
-            "#111827"
-        ),
+        textColor=colors.HexColor("#111827"),
     )
 
     styles["JAXHeading2"] = ParagraphStyle(
@@ -1608,9 +1554,7 @@ def build_professional_pdf(
         leading=18,
         spaceBefore=5 * mm,
         spaceAfter=3 * mm,
-        textColor=colors.HexColor(
-            "#1F2937"
-        ),
+        textColor=colors.HexColor("#1F2937"),
     )
 
     styles["JAXHeading3"] = ParagraphStyle(
@@ -1621,9 +1565,7 @@ def build_professional_pdf(
         leading=16,
         spaceBefore=4 * mm,
         spaceAfter=2 * mm,
-        textColor=colors.HexColor(
-            "#374151"
-        ),
+        textColor=colors.HexColor("#374151"),
     )
 
     styles["JAXBody"] = ParagraphStyle(
@@ -1633,9 +1575,7 @@ def build_professional_pdf(
         fontSize=10,
         leading=15,
         spaceAfter=2.5 * mm,
-        textColor=colors.HexColor(
-            "#1F2937"
-        ),
+        textColor=colors.HexColor("#1F2937"),
     )
 
     styles["JAXBullet"] = ParagraphStyle(
@@ -1663,20 +1603,9 @@ def build_professional_pdf(
     )
 
     info_data = [
-        [
-            "Report Scope",
-            selected_pdf,
-        ],
-        [
-            "Documents",
-            str(
-                len(pdf_names)
-            ),
-        ],
-        [
-            "Generated By",
-            "JAXOVIQ AI Assistant",
-        ],
+        ["Report Scope", selected_pdf],
+        ["Documents", str(len(pdf_names))],
+        ["Generated By", "JAXOVIQ AI Assistant"],
     ]
 
     info_table = Table(
@@ -1694,89 +1623,35 @@ def build_professional_pdf(
                     "BACKGROUND",
                     (0, 0),
                     (0, -1),
-                    colors.HexColor(
-                        "#F3F4F6"
-                    ),
+                    colors.HexColor("#F3F4F6"),
                 ),
                 (
                     "TEXTCOLOR",
                     (0, 0),
                     (-1, -1),
-                    colors.HexColor(
-                        "#111827"
-                    ),
+                    colors.HexColor("#111827"),
                 ),
-                (
-                    "FONTNAME",
-                    (0, 0),
-                    (0, -1),
-                    "Helvetica-Bold",
-                ),
-                (
-                    "FONTNAME",
-                    (1, 0),
-                    (1, -1),
-                    "Helvetica",
-                ),
-                (
-                    "FONTSIZE",
-                    (0, 0),
-                    (-1, -1),
-                    10,
-                ),
+                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+                ("FONTNAME", (1, 0), (1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
                 (
                     "GRID",
                     (0, 0),
                     (-1, -1),
                     0.4,
-                    colors.HexColor(
-                        "#D1D5DB"
-                    ),
+                    colors.HexColor("#D1D5DB"),
                 ),
-                (
-                    "VALIGN",
-                    (0, 0),
-                    (-1, -1),
-                    "TOP",
-                ),
-                (
-                    "LEFTPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    7,
-                ),
-                (
-                    "RIGHTPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    7,
-                ),
-                (
-                    "TOPPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    7,
-                ),
-                (
-                    "BOTTOMPADDING",
-                    (0, 0),
-                    (-1, -1),
-                    7,
-                ),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
             ]
         )
     )
 
-    story.append(
-        info_table
-    )
-
-    story.append(
-        Spacer(
-            1,
-            8 * mm,
-        )
-    )
+    story.append(info_table)
+    story.append(Spacer(1, 8 * mm))
 
     if pdf_names:
         story.append(
@@ -1795,66 +1670,36 @@ def build_professional_pdf(
             )
 
     if summary:
-        story.append(
-            PageBreak()
-        )
-
+        story.append(PageBreak())
         story.append(
             Paragraph(
                 "Document Summary",
                 styles["JAXHeading1"],
             )
         )
-
-        add_text_to_pdf_story(
-            story,
-            summary,
-            styles,
-        )
+        add_text_to_pdf_story(story, summary, styles)
 
     if actions:
-        story.append(
-            PageBreak()
-        )
-
+        story.append(PageBreak())
         story.append(
             Paragraph(
                 "Action Items",
                 styles["JAXHeading1"],
             )
         )
-
-        add_text_to_pdf_story(
-            story,
-            actions,
-            styles,
-        )
+        add_text_to_pdf_story(story, actions, styles)
 
     if insights:
-        story.append(
-            PageBreak()
-        )
-
+        story.append(PageBreak())
         story.append(
             Paragraph(
                 "Document Insights",
                 styles["JAXHeading1"],
             )
         )
+        add_text_to_pdf_story(story, insights, styles)
 
-        add_text_to_pdf_story(
-            story,
-            insights,
-            styles,
-        )
-
-    story.append(
-        Spacer(
-            1,
-            10 * mm,
-        )
-    )
-
+    story.append(Spacer(1, 10 * mm))
     story.append(
         Paragraph(
             "Generated by JAXOVIQ AI Assistant",
@@ -1862,12 +1707,9 @@ def build_professional_pdf(
         )
     )
 
-    document.build(
-        story
-    )
+    document.build(story)
 
     pdf_bytes = buffer.getvalue()
-
     buffer.close()
 
     return pdf_bytes
@@ -1881,23 +1723,12 @@ if (
     not st.session_state.persistent_loaded
     and not st.session_state.knowledge_base_ready
 ):
-    saved_data = (
-        load_persistent_knowledge_base()
-    )
+    saved_data = load_persistent_knowledge_base()
 
     if saved_data:
-        st.session_state.index = (
-            saved_data["index"]
-        )
-
-        st.session_state.chunks = (
-            saved_data["chunks"]
-        )
-
-        st.session_state.pdf_names = (
-            saved_data["pdf_names"]
-        )
-
+        st.session_state.index = saved_data["index"]
+        st.session_state.chunks = saved_data["chunks"]
+        st.session_state.pdf_names = saved_data["pdf_names"]
         st.session_state.knowledge_base_ready = True
 
     st.session_state.persistent_loaded = True
@@ -1908,94 +1739,29 @@ if (
 # ============================================================
 
 with st.sidebar:
-    st.title(
-        "⚡ JAXOVIQ"
-    )
+    st.title("⚡ JAXOVIQ")
 
-    st.caption(
-        "AI Knowledge Assistant"
-    )
+    st.caption("AI Knowledge Assistant")
 
     st.divider()
-    with st.expander("🔐 Admin Usage Stats"):
-        admin_password = st.text_input(
-            "Admin password",
-            type="password",
-            key="stats_admin_password",
-        )
-
-        if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
-            stats = load_stats()
-
-            admin_mode = st.checkbox(
-                "🧪 Admin Test Mode",
-                value=st.session_state.admin_test_mode,
-            )
-
-            if admin_mode and not st.session_state.admin_test_mode:
-                stats.setdefault("external_sessions", 0)
-                stats.setdefault("admin_tests", 0)
-
-                if st.session_state.visitor_counted:
-                    stats["external_sessions"] = max(
-                        0,
-                        stats["external_sessions"] - 1,
-                    )
-                    stats["admin_tests"] += 1
-                    st.session_state.visitor_counted = False
-
-                save_stats(stats)
-                st.session_state.admin_test_mode = True
-
-            elif not admin_mode:
-                st.session_state.admin_test_mode = False
-
-            st.write("Traffic Sources")
-            st.write("Meta:", stats.get("meta_visits", 0))
-            st.write("LinkedIn:", stats.get("linkedin_visits", 0))
-            st.write("Instagram:", stats.get("instagram_visits", 0))
-            st.metric("App Opens", stats.get("app_opens", 0))
-            st.metric("PDF Uploads", stats.get("pdf_uploads", 0))
-            st.metric("Questions", stats.get("questions", 0))
-
-        elif admin_password:
-            st.error("Wrong password")
 
     if st.session_state.knowledge_base_ready:
-        st.success(
-            "● Knowledge Base Active"
-        )
-
+        st.success("● Knowledge Base Active")
     else:
-        st.warning(
-            "● Knowledge Base Not Built"
-        )
+        st.warning("● Knowledge Base Not Built")
 
-    st.subheader(
-        "📚 Documents"
-    )
+    st.subheader("📚 Documents")
 
     uploaded_files = st.file_uploader(
         "Upload PDF files",
         type=["pdf"],
         accept_multiple_files=True,
     )
-    if uploaded_files:
-       current_files = [f.name for f in uploaded_files]
 
-       if st.session_state.get("last_uploaded_files") != current_files:
-        stats = load_stats()
-        stats["pdf_uploads"] += len(uploaded_files)
-        save_stats(stats)
-        st.session_state.last_uploaded_files = current_files
-    document_options = [
-        "All Documents"
-    ]
+    document_options = ["All Documents"]
 
     if st.session_state.pdf_names:
-        document_options += (
-            st.session_state.pdf_names
-        )
+        document_options += st.session_state.pdf_names
 
     elif uploaded_files:
         document_options += [
@@ -2014,43 +1780,24 @@ with st.sidebar:
         use_container_width=True,
     ):
         if not uploaded_files:
-            st.warning(
-                "Please upload at least one PDF."
-            )
+            st.warning("Please upload at least one PDF.")
 
         else:
             with st.spinner(
                 "Building JAXOVIQ Knowledge Base..."
             ):
-                index, chunks = (
-                    build_faiss_index(
-                        uploaded_files
-                    )
-                )
+                index, chunks = build_faiss_index(uploaded_files)
 
-            if (
-                index is not None
-                and chunks is not None
-            ):
+            if index is not None and chunks is not None:
                 pdf_names = [
                     file.name
                     for file in uploaded_files
                 ]
 
-                st.session_state.index = (
-                    index
-                )
-
-                st.session_state.chunks = (
-                    chunks
-                )
-
-                st.session_state.pdf_names = (
-                    pdf_names
-                )
-
+                st.session_state.index = index
+                st.session_state.chunks = chunks
+                st.session_state.pdf_names = pdf_names
                 st.session_state.messages = []
-
                 st.session_state.knowledge_base_ready = True
 
                 st.session_state.pdf_summary = None
@@ -2072,56 +1819,41 @@ with st.sidebar:
                 st.session_state.suggestions_scope = None
                 st.session_state.pending_question = None
 
+                st.session_state.comparison_result = None
+                st.session_state.comparison_pair = None
+                st.session_state.risk_check_result = None
+                st.session_state.risk_check_scope = None
+                st.session_state.deadline_result = None
+                st.session_state.deadline_scope = None
+
                 save_persistent_knowledge_base(
                     index,
                     chunks,
                     pdf_names,
                 )
 
-                with st.spinner(
-                    "Generating smart questions..."
-                ):
+                with st.spinner("Generating smart questions..."):
                     st.session_state.suggested_questions = (
-                        generate_suggested_questions(
-                            "All Documents"
-                        )
+                        generate_suggested_questions("All Documents")
                     )
+                    st.session_state.suggestions_scope = "All Documents"
 
-                    st.session_state.suggestions_scope = (
-                        "All Documents"
-                    )
-
-                st.success(
-                    "Knowledge base ready and saved."
-                )
-
+                st.success("Knowledge base ready and saved.")
                 st.rerun()
 
     if st.session_state.pdf_names:
         st.divider()
-
-        st.caption(
-            "Loaded PDFs"
-        )
+        st.caption("Loaded PDFs")
 
         for pdf_name in st.session_state.pdf_names:
-            st.write(
-                f"📄 {pdf_name}"
-            )
+            st.write(f"📄 {pdf_name}")
 
-        if (
-            INDEX_FILE.exists()
-            and CHUNKS_FILE.exists()
-        ):
-            st.caption(
-                "💾 Saved locally"
-            )
+        if INDEX_FILE.exists() and CHUNKS_FILE.exists():
+            st.caption("💾 Saved locally")
 
     st.divider()
 
-    col_a, col_b = st.columns(
-        2
-    )
+    col_a, col_b = st.columns(2)
 
     with col_a:
         if st.button(
@@ -2129,7 +1861,6 @@ with st.sidebar:
             use_container_width=True,
         ):
             st.session_state.messages = []
-
             st.rerun()
 
     with col_b:
@@ -2143,52 +1874,116 @@ with st.sidebar:
                 st.session_state[key] = value
 
             st.session_state.persistent_loaded = True
-
             st.rerun()
 
 
 # ============================================================
-# HERO
+# CLIENT-DEMO HERO
 # ============================================================
 
 st.markdown(
-    '<div class="jaxoviq-hero">'
-    '<div class="jaxoviq-title">⚡ JAXOVIQ AI Assistant</div>'
-    '<div class="jaxoviq-subtitle">Search, analyze and understand your documents with grounded AI.</div>'
-    '</div>',
+    """
+    <div class="jaxoviq-hero">
+        <div class="jaxoviq-eyebrow">AI Document Intelligence</div>
+        <div class="jaxoviq-title">⚡ JAXOVIQ AI Assistant</div>
+        <div class="jaxoviq-subtitle">
+            Turn business PDFs into a searchable knowledge base.
+            Ask questions, verify answers with page-level evidence,
+            summarize documents, extract action items and export reports.
+        </div>
+    </div>
+    """,
     unsafe_allow_html=True,
 )
+
+use1, use2, use3, use4 = st.columns(4)
+
+with use1:
+    st.markdown(
+        """
+        <div class="jaxoviq-usecase">
+            <div class="jaxoviq-usecase-title">🍽️ Restaurants</div>
+            <div class="jaxoviq-usecase-text">
+                SOPs, menus, supplier documents, staff manuals and policies.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with use2:
+    st.markdown(
+        """
+        <div class="jaxoviq-usecase">
+            <div class="jaxoviq-usecase-title">👥 HR & Operations</div>
+            <div class="jaxoviq-usecase-text">
+                Employee handbooks, procedures, onboarding and internal knowledge.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with use3:
+    st.markdown(
+        """
+        <div class="jaxoviq-usecase">
+            <div class="jaxoviq-usecase-title">📑 Contracts & Policies</div>
+            <div class="jaxoviq-usecase-text">
+                Find clauses, dates, obligations, risks and supporting evidence.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with use4:
+    st.markdown(
+        """
+        <div class="jaxoviq-usecase">
+            <div class="jaxoviq-usecase-title">📊 Business Reports</div>
+            <div class="jaxoviq-usecase-text">
+                Summaries, action items, insights and downloadable AI reports.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+st.markdown(
+    """
+    <div class="demo-note">
+        <strong>Grounded answers:</strong>
+        JAXOVIQ answers from uploaded PDFs only and shows source files,
+        page numbers, evidence and confidence scores.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # ============================================================
 # TOP DASHBOARD
 # ============================================================
 
-metric1, metric2, metric3, metric4 = (
-    st.columns(4)
-)
+metric1, metric2, metric3, metric4 = st.columns(4)
 
 with metric1:
     st.metric(
         "PDFs",
-        len(
-            st.session_state.pdf_names
-        ),
+        len(st.session_state.pdf_names),
     )
 
 with metric2:
     st.metric(
         "Knowledge Chunks",
-        len(
-            st.session_state.chunks
-        ),
+        len(st.session_state.chunks),
     )
 
 with metric3:
     st.metric(
         "Chat Messages",
-        len(
-            st.session_state.messages
-        ),
+        len(st.session_state.messages),
     )
 
 with metric4:
@@ -2213,13 +2008,8 @@ if st.session_state.knowledge_base_ready:
         f"✅ Knowledge Base Active · Scope: {selected_pdf}"
     )
 
-    if (
-        INDEX_FILE.exists()
-        and CHUNKS_FILE.exists()
-    ):
-        st.caption(
-            "💾 Persistent Knowledge Base: Saved"
-        )
+    if INDEX_FILE.exists() and CHUNKS_FILE.exists():
+        st.caption("💾 Persistent Knowledge Base: Saved")
 
 else:
     st.info(
@@ -2233,19 +2023,15 @@ else:
 # ============================================================
 
 if st.session_state.knowledge_base_ready:
-
     stats = get_document_stats()
 
     with st.expander(
         "📊 Document Statistics",
-        expanded=True,
+        expanded=False,
     ):
-        st.caption(
-            f"Current scope: {selected_pdf}"
-        )
+        st.caption(f"Current scope: {selected_pdf}")
 
         for pdf_name in st.session_state.pdf_names:
-
             data = stats.get(
                 pdf_name,
                 {
@@ -2254,13 +2040,9 @@ if st.session_state.knowledge_base_ready:
                 },
             )
 
-            st.markdown(
-                f"### 📄 {pdf_name}"
-            )
+            st.markdown(f"### 📄 {pdf_name}")
 
-            stat1, stat2, stat3 = st.columns(
-                3
-            )
+            stat1, stat2, stat3 = st.columns(3)
 
             with stat1:
                 st.metric(
@@ -2277,10 +2059,8 @@ if st.session_state.knowledge_base_ready:
             with stat3:
                 if selected_pdf == pdf_name:
                     scope_status = "Selected"
-
                 elif selected_pdf == "All Documents":
                     scope_status = "Included"
-
                 else:
                     scope_status = "Not Selected"
 
@@ -2297,64 +2077,152 @@ if st.session_state.knowledge_base_ready:
 # ============================================================
 
 if st.session_state.knowledge_base_ready:
-
-    st.subheader(
-        "💡 Suggested Questions"
-    )
+    st.subheader("💡 Suggested Questions")
 
     st.caption(
         "Click a question and JAXOVIQ will search your PDFs automatically."
     )
 
-    if (
-        st.session_state.suggestions_scope
-        != selected_pdf
-    ):
+    if st.session_state.suggestions_scope != selected_pdf:
         if st.button(
             "✨ Generate Questions for Current Scope",
             use_container_width=True,
         ):
-            with st.spinner(
-                "Generating smart questions..."
-            ):
+            with st.spinner("Generating smart questions..."):
                 st.session_state.suggested_questions = (
-                    generate_suggested_questions(
-                        selected_pdf
-                    )
+                    generate_suggested_questions(selected_pdf)
                 )
 
-                st.session_state.suggestions_scope = (
-                    selected_pdf
-                )
+                st.session_state.suggestions_scope = selected_pdf
 
             st.rerun()
 
     if st.session_state.suggested_questions:
-
         for index, suggested_question in enumerate(
             st.session_state.suggested_questions,
             start=1,
         ):
-            safe_scope = selected_pdf.replace(
-                " ",
-                "_",
-            )
+            safe_scope = selected_pdf.replace(" ", "_")
 
             if st.button(
                 f"💬 {suggested_question}",
                 key=f"suggested_question_{safe_scope}_{index}",
                 use_container_width=True,
             ):
-                st.session_state.pending_question = (
-                    suggested_question
-                )
-
+                st.session_state.pending_question = suggested_question
                 st.rerun()
 
     else:
-        st.info(
-            "No suggested questions available yet."
+        st.info("No suggested questions available yet.")
+
+    st.divider()
+
+
+# ============================================================
+# BUSINESS ANALYSIS
+# ============================================================
+
+if st.session_state.knowledge_base_ready:
+    st.subheader("⚡ Business Analysis")
+    st.caption(
+        "Compare documents, review contracts/policies, and extract deadlines "
+        "using only your uploaded PDF evidence."
+    )
+
+    business_col1, business_col2 = st.columns(2)
+
+    with business_col1:
+        risk_clicked = st.button(
+            "🛡️ Contract / Policy Check",
+            use_container_width=True,
+            help="Flags practical risks, unclear wording, obligations and review points. Not legal advice.",
         )
+
+    with business_col2:
+        deadline_clicked = st.button(
+            "📅 Extract Deadlines & Key Terms",
+            use_container_width=True,
+            help="Extracts dates, notice periods, renewals, payment terms and other important facts.",
+        )
+
+    if risk_clicked:
+        with st.spinner("Reviewing contract / policy terms..."):
+            st.session_state.risk_check_result = run_risk_check(selected_pdf)
+            st.session_state.risk_check_scope = selected_pdf
+
+    if deadline_clicked:
+        with st.spinner("Extracting deadlines and key terms..."):
+            st.session_state.deadline_result = extract_deadlines_and_key_terms(selected_pdf)
+            st.session_state.deadline_scope = selected_pdf
+
+    if len(st.session_state.pdf_names) >= 2:
+        st.markdown("#### 🔄 Compare Two Documents")
+        compare_col1, compare_col2, compare_col3 = st.columns([2, 2, 1])
+
+        with compare_col1:
+            compare_a = st.selectbox(
+                "Document A",
+                st.session_state.pdf_names,
+                index=0,
+                key="compare_document_a",
+            )
+
+        with compare_col2:
+            default_b_index = 1 if len(st.session_state.pdf_names) > 1 else 0
+            compare_b = st.selectbox(
+                "Document B",
+                st.session_state.pdf_names,
+                index=default_b_index,
+                key="compare_document_b",
+            )
+
+        with compare_col3:
+            st.write("")
+            st.write("")
+            compare_clicked = st.button(
+                "Compare",
+                use_container_width=True,
+                type="primary",
+            )
+
+        if compare_clicked:
+            if compare_a == compare_b:
+                st.warning("Choose two different documents to compare.")
+            else:
+                with st.spinner("Comparing documents..."):
+                    st.session_state.comparison_result = compare_documents(
+                        compare_a,
+                        compare_b,
+                    )
+                    st.session_state.comparison_pair = (compare_a, compare_b)
+    else:
+        st.info("Upload at least 2 PDFs to unlock Document Comparison.")
+
+    if (
+        st.session_state.risk_check_result
+        and st.session_state.risk_check_scope == selected_pdf
+    ):
+        with st.expander("🛡️ Contract / Policy Check", expanded=True):
+            st.warning(
+                "AI-assisted document review only — not legal advice. "
+                "Important clauses should be verified by a qualified professional."
+            )
+            st.markdown(st.session_state.risk_check_result)
+
+    if (
+        st.session_state.deadline_result
+        and st.session_state.deadline_scope == selected_pdf
+    ):
+        with st.expander("📅 Deadlines & Key Terms", expanded=True):
+            st.markdown(st.session_state.deadline_result)
+
+    if st.session_state.comparison_result and st.session_state.comparison_pair:
+        pair = st.session_state.comparison_pair
+        with st.expander(
+            f"🔄 Comparison: {pair[0]} ↔ {pair[1]}",
+            expanded=True,
+        ):
+            st.markdown(st.session_state.comparison_result)
 
     st.divider()
 
@@ -2364,14 +2232,9 @@ if st.session_state.knowledge_base_ready:
 # ============================================================
 
 if st.session_state.knowledge_base_ready:
+    st.subheader("🧰 Document Tools")
 
-    st.subheader(
-        "🧰 Document Tools"
-    )
-
-    col1, col2, col3, col4 = (
-        st.columns(4)
-    )
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         summarize_clicked = st.button(
@@ -2398,117 +2261,62 @@ if st.session_state.knowledge_base_ready:
         )
 
     if summarize_clicked:
-        with st.spinner(
-            "Creating document summary..."
-        ):
+        with st.spinner("Creating document summary..."):
             st.session_state.pdf_summary = (
-                generate_pdf_summary(
-                    selected_pdf
-                )
+                generate_pdf_summary(selected_pdf)
             )
-
-            st.session_state.summary_scope = (
-                selected_pdf
-            )
+            st.session_state.summary_scope = selected_pdf
 
     if actions_clicked:
-        with st.spinner(
-            "Finding action items..."
-        ):
+        with st.spinner("Finding action items..."):
             st.session_state.action_items = (
-                generate_action_items(
-                    selected_pdf
-                )
+                generate_action_items(selected_pdf)
             )
-
-            st.session_state.action_scope = (
-                selected_pdf
-            )
+            st.session_state.action_scope = selected_pdf
 
     if insights_clicked:
-        with st.spinner(
-            "Analyzing document insights..."
-        ):
+        with st.spinner("Analyzing document insights..."):
             st.session_state.document_insights = (
-                generate_document_insights(
-                    selected_pdf
-                )
+                generate_document_insights(selected_pdf)
             )
-
-            st.session_state.insights_scope = (
-                selected_pdf
-            )
+            st.session_state.insights_scope = selected_pdf
 
     if export_clicked:
         with st.spinner(
             "Preparing professional JAXOVIQ report..."
         ):
-
             summary = (
                 st.session_state.pdf_summary
-                if (
-                    st.session_state.summary_scope
-                    == selected_pdf
-                )
+                if st.session_state.summary_scope == selected_pdf
                 else None
             )
 
             if not summary:
-                summary = generate_pdf_summary(
-                    selected_pdf
-                )
-
-                st.session_state.pdf_summary = (
-                    summary
-                )
-
-                st.session_state.summary_scope = (
-                    selected_pdf
-                )
+                summary = generate_pdf_summary(selected_pdf)
+                st.session_state.pdf_summary = summary
+                st.session_state.summary_scope = selected_pdf
 
             actions = (
                 st.session_state.action_items
-                if (
-                    st.session_state.action_scope
-                    == selected_pdf
-                )
+                if st.session_state.action_scope == selected_pdf
                 else None
             )
 
             if not actions:
-                actions = generate_action_items(
-                    selected_pdf
-                )
-
-                st.session_state.action_items = (
-                    actions
-                )
-
-                st.session_state.action_scope = (
-                    selected_pdf
-                )
+                actions = generate_action_items(selected_pdf)
+                st.session_state.action_items = actions
+                st.session_state.action_scope = selected_pdf
 
             insights = (
                 st.session_state.document_insights
-                if (
-                    st.session_state.insights_scope
-                    == selected_pdf
-                )
+                if st.session_state.insights_scope == selected_pdf
                 else None
             )
 
             if not insights:
-                insights = generate_document_insights(
-                    selected_pdf
-                )
-
-                st.session_state.document_insights = (
-                    insights
-                )
-
-                st.session_state.insights_scope = (
-                    selected_pdf
-                )
+                insights = generate_document_insights(selected_pdf)
+                st.session_state.document_insights = insights
+                st.session_state.insights_scope = selected_pdf
 
             st.session_state.export_report = (
                 build_export_report(
@@ -2519,9 +2327,7 @@ if st.session_state.knowledge_base_ready:
                 )
             )
 
-            st.session_state.export_scope = (
-                selected_pdf
-            )
+            st.session_state.export_scope = selected_pdf
 
             try:
                 st.session_state.pdf_report_bytes = (
@@ -2534,69 +2340,51 @@ if st.session_state.knowledge_base_ready:
                     )
                 )
 
-                st.session_state.pdf_report_scope = (
-                    selected_pdf
-                )
+                st.session_state.pdf_report_scope = selected_pdf
 
             except Exception as e:
                 st.session_state.pdf_report_bytes = None
                 st.session_state.pdf_report_scope = None
 
-                st.error(
-                    f"Could not create PDF report: {e}"
-                )
+                st.error(f"Could not create PDF report: {e}")
 
     if (
         st.session_state.pdf_summary
-        and st.session_state.summary_scope
-        == selected_pdf
+        and st.session_state.summary_scope == selected_pdf
     ):
         with st.expander(
             "📄 Document Summary",
             expanded=True,
         ):
-            st.markdown(
-                st.session_state.pdf_summary
-            )
+            st.markdown(st.session_state.pdf_summary)
 
     if (
         st.session_state.action_items
-        and st.session_state.action_scope
-        == selected_pdf
+        and st.session_state.action_scope == selected_pdf
     ):
         with st.expander(
             "✅ Action Items",
             expanded=True,
         ):
-            st.markdown(
-                st.session_state.action_items
-            )
+            st.markdown(st.session_state.action_items)
 
     if (
         st.session_state.document_insights
-        and st.session_state.insights_scope
-        == selected_pdf
+        and st.session_state.insights_scope == selected_pdf
     ):
         with st.expander(
             "📊 Document Insights",
             expanded=True,
         ):
-            st.markdown(
-                st.session_state.document_insights
-            )
+            st.markdown(st.session_state.document_insights)
 
     if (
         st.session_state.export_report
-        and st.session_state.export_scope
-        == selected_pdf
+        and st.session_state.export_scope == selected_pdf
     ):
-        st.success(
-            "📥 JAXOVIQ report is ready."
-        )
+        st.success("📥 JAXOVIQ report is ready.")
 
-        download_col1, download_col2 = st.columns(
-            2
-        )
+        download_col1, download_col2 = st.columns(2)
 
         with download_col1:
             st.download_button(
@@ -2610,8 +2398,7 @@ if st.session_state.knowledge_base_ready:
         with download_col2:
             if (
                 st.session_state.pdf_report_bytes
-                and st.session_state.pdf_report_scope
-                == selected_pdf
+                and st.session_state.pdf_report_scope == selected_pdf
             ):
                 st.download_button(
                     label="📄 Download Professional PDF",
@@ -2628,33 +2415,19 @@ if st.session_state.knowledge_base_ready:
 # CHAT
 # ============================================================
 
-st.subheader(
-    "💬 Ask JAXOVIQ"
-)
-
+st.subheader("💬 Ask JAXOVIQ")
 
 for message in st.session_state.messages:
-
-    with st.chat_message(
-        message["role"]
-    ):
-        st.markdown(
-            message["content"]
-        )
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
         if message.get("sources"):
-            with st.expander(
-                "📚 Sources"
-            ):
+            with st.expander("📚 Sources"):
                 for source in message["sources"]:
-                    st.write(
-                        source
-                    )
+                    st.write(source)
 
         if message.get("evidence"):
-            display_evidence(
-                message["evidence"]
-            )
+            display_evidence(message["evidence"])
 
         if message.get("confidence"):
             st.caption(
@@ -2667,30 +2440,6 @@ for message in st.session_state.messages:
                 f'{message["score"]:.3f}'
             )
 
-# ---------------- FEEDBACK ----------------
-with st.expander("💬 Give Feedback"):
-    feedback_rating = st.radio(
-        "Was JAXOVIQ helpful?",
-        ["👍 Yes", "😐 Partly", "👎 No"],
-        horizontal=True
-    )
-
-    feedback_comment = st.text_area(
-        "Tell us what we can improve:",
-        placeholder="Write your feedback here..."
-    )
-
-    if st.button("Submit Feedback"):
-        from datetime import datetime
-
-        with open("feedback.txt", "a", encoding="utf-8") as f:
-            f.write(
-                f"{datetime.now()} | {feedback_rating} | {feedback_comment}\n"
-            )
-
-        st.success("Thank you! Your feedback has been submitted. 🙏")
-
-
 
 typed_question = st.chat_input(
     "Ask a question about your PDFs..."
@@ -2700,7 +2449,6 @@ question = None
 
 if st.session_state.pending_question:
     question = st.session_state.pending_question
-
     st.session_state.pending_question = None
 
 elif typed_question:
@@ -2712,23 +2460,15 @@ elif typed_question:
 # ============================================================
 
 if question:
-    stats = load_stats()
-    stats["questions"] += 1
-    save_stats(stats)
-
     if not st.session_state.knowledge_base_ready:
-        st.warning(
-            "Please build the knowledge base first."
-        )
+        st.warning("Please build the knowledge base first.")
+
     else:
-        with st.spinner(
-            "Understanding your question..."
-        ):
+        with st.spinner("Understanding your question..."):
             resolved_question = (
-                resolve_followup_question(
-                    question
-                )
+                resolve_followup_question(question)
             )
+
         st.session_state.messages.append(
             {
                 "role": "user",
@@ -2736,21 +2476,11 @@ if question:
             }
         )
 
-        with st.chat_message(
-            "user"
-        ):
-            st.markdown(
-                question
-            )
+        with st.chat_message("user"):
+            st.markdown(question)
 
-        with st.chat_message(
-            "assistant"
-        ):
-
-            with st.spinner(
-                "Searching your documents..."
-            ):
-
+        with st.chat_message("assistant"):
+            with st.spinner("Searching your documents..."):
                 candidates, best_score = (
                     retrieve_chunks(
                         resolved_question,
@@ -2758,33 +2488,18 @@ if question:
                     )
                 )
 
-                confidence = (
-                    get_confidence_label(
-                        best_score
-                    )
-                )
+                confidence = get_confidence_label(best_score)
 
-                if (
-                    not candidates
-                    or best_score < MIN_SCORE
-                ):
-
+                if not candidates or best_score < MIN_SCORE:
                     answer = (
                         "I could not find that "
                         "information in the PDFs."
                     )
 
-                    st.markdown(
-                        answer
-                    )
-
+                    st.markdown(answer)
+                    st.caption(f"Confidence: {confidence}")
                     st.caption(
-                        f"Confidence: {confidence}"
-                    )
-
-                    st.caption(
-                        f"Similarity score: "
-                        f"{best_score:.3f}"
+                        f"Similarity score: {best_score:.3f}"
                     )
 
                     st.session_state.messages.append(
@@ -2799,10 +2514,15 @@ if question:
                     )
 
                 else:
-
                     selected = rerank_chunks(
                         resolved_question,
                         candidates,
+                    )
+
+                    # Clean weak unrelated evidence from final client-facing output.
+                    selected = filter_selected_evidence(
+                        selected,
+                        best_score,
                     )
 
                     answer = generate_answer(
@@ -2812,19 +2532,14 @@ if question:
                     )
 
                     if not answer:
-                        answer = (
-                            "I could not generate an answer."
-                        )
+                        answer = "I could not generate an answer."
 
-                    st.markdown(
-                        answer
-                    )
+                    st.markdown(answer)
 
                     source_list = []
                     seen_sources = set()
 
                     for item in selected:
-
                         chunk = item["chunk"]
 
                         source_key = (
@@ -2835,9 +2550,7 @@ if question:
                         if source_key in seen_sources:
                             continue
 
-                        seen_sources.add(
-                            source_key
-                        )
+                        seen_sources.add(source_key)
 
                         source_list.append(
                             f'📄 {chunk["file"]} '
@@ -2845,31 +2558,16 @@ if question:
                         )
 
                     if source_list:
-                        with st.expander(
-                            "📚 Sources"
-                        ):
+                        with st.expander("📚 Sources"):
                             for source in source_list:
-                                st.write(
-                                    source
-                                )
+                                st.write(source)
 
-                    evidence_list = (
-                        build_evidence_list(
-                            selected
-                        )
-                    )
+                    evidence_list = build_evidence_list(selected)
+                    display_evidence(evidence_list)
 
-                    display_evidence(
-                        evidence_list
-                    )
-
+                    st.caption(f"Confidence: {confidence}")
                     st.caption(
-                        f"Confidence: {confidence}"
-                    )
-
-                    st.caption(
-                        f"Similarity score: "
-                        f"{best_score:.3f}"
+                        f"Similarity score: {best_score:.3f}"
                     )
 
                     st.session_state.messages.append(
