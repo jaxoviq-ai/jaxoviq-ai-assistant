@@ -2,6 +2,8 @@ import io
 import json
 import time
 import html
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import faiss
@@ -61,6 +63,8 @@ DATA_DIR = APP_DIR / "jaxoviq_data"
 INDEX_FILE = DATA_DIR / "knowledge.index"
 CHUNKS_FILE = DATA_DIR / "chunks.json"
 META_FILE = DATA_DIR / "meta.json"
+ANALYTICS_FILE = DATA_DIR / "analytics.json"
+FEEDBACK_FILE = DATA_DIR / "feedback.json"
 
 
 # ============================================================
@@ -212,12 +216,152 @@ defaults = {
     "deadline_result": None,
     "deadline_scope": None,
 
+    # Executive intelligence
+    "executive_brief": None,
+    "executive_brief_scope": None,
+    "document_audit": None,
+    "document_audit_scope": None,
+
+    # Admin / analytics
+    "admin_authenticated": False,
+    "admin_test_mode": False,
+    "analytics_session_tracked": False,
+
     "persistent_loaded": False,
 }
 
 for key, value in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = value
+
+
+# ============================================================
+# PRODUCT ANALYTICS + FEEDBACK
+# ============================================================
+
+def _analytics_defaults():
+    return {
+        "app_opens": 0,
+        "pdf_uploads": 0,
+        "questions": 0,
+        "analysis_runs": 0,
+        "reports_exported": 0,
+        "feedback_count": 0,
+        "traffic_sources": {
+            "Meta": 0,
+            "Instagram": 0,
+            "LinkedIn": 0,
+            "Google": 0,
+            "Direct": 0,
+            "Other": 0,
+        },
+        "last_updated_utc": None,
+    }
+
+
+def load_analytics():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    defaults_data = _analytics_defaults()
+
+    if not ANALYTICS_FILE.exists():
+        return defaults_data
+
+    try:
+        saved = json.loads(ANALYTICS_FILE.read_text(encoding="utf-8"))
+        for key, value in defaults_data.items():
+            if key not in saved:
+                saved[key] = value
+        if not isinstance(saved.get("traffic_sources"), dict):
+            saved["traffic_sources"] = defaults_data["traffic_sources"]
+        for source, count in defaults_data["traffic_sources"].items():
+            saved["traffic_sources"].setdefault(source, count)
+        return saved
+    except Exception:
+        return defaults_data
+
+
+def save_analytics(data):
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        data["last_updated_utc"] = datetime.now(timezone.utc).isoformat()
+        ANALYTICS_FILE.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def normalize_traffic_source(raw_source):
+    value = (raw_source or "").strip().lower()
+    if not value:
+        return "Direct"
+    if "instagram" in value or value in {"ig", "insta"}:
+        return "Instagram"
+    if "linkedin" in value:
+        return "LinkedIn"
+    if "meta" in value or "facebook" in value or value == "fb":
+        return "Meta"
+    if "google" in value:
+        return "Google"
+    return "Other"
+
+
+def current_traffic_source():
+    try:
+        raw = st.query_params.get("utm_source") or st.query_params.get("source")
+        if isinstance(raw, list):
+            raw = raw[0] if raw else ""
+        return normalize_traffic_source(raw)
+    except Exception:
+        return "Direct"
+
+
+def track_event(event_name, amount=1, traffic_source=None):
+    if st.session_state.get("admin_test_mode", False):
+        return
+
+    data = load_analytics()
+    if event_name in data and isinstance(data[event_name], int):
+        data[event_name] += int(amount)
+
+    if traffic_source:
+        source = normalize_traffic_source(traffic_source)
+        data["traffic_sources"][source] = (
+            data["traffic_sources"].get(source, 0) + int(amount)
+        )
+
+    save_analytics(data)
+
+
+def save_feedback(rating, message):
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    entries = []
+    if FEEDBACK_FILE.exists():
+        try:
+            entries = json.loads(FEEDBACK_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            entries = []
+
+    entries.append(
+        {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "rating": rating,
+            "message": message.strip(),
+        }
+    )
+    FEEDBACK_FILE.write_text(
+        json.dumps(entries[-500:], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    track_event("feedback_count")
+
+
+# Count one open per browser session, not every Streamlit rerun.
+if not st.session_state.analytics_session_tracked:
+    source = current_traffic_source()
+    track_event("app_opens", traffic_source=source)
+    st.session_state.analytics_session_tracked = True
 
 
 # ============================================================
@@ -1297,6 +1441,96 @@ PDF CONTENT:
 # EVIDENCE VIEWER
 # ============================================================
 
+# ============================================================
+# EXECUTIVE INTELLIGENCE
+# ============================================================
+
+def generate_executive_brief(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
+    if not scoped_chunks:
+        return "No document content is available for this scope."
+
+    context = "\n\n".join(
+        f'DOCUMENT: {c["file"]}\nPAGE: {c["page"]}\n{c["text"]}'
+        for c in scoped_chunks[:45]
+    )
+
+    prompt = f"""
+You are JAXOVIQ Executive Intelligence.
+Create a decision-ready executive brief using ONLY the supplied PDF content.
+Never invent facts. Every important fact must include its source in the form
+[Document name, p.X].
+
+Return these sections:
+
+## Executive Snapshot
+5 concise bullets covering the most decision-relevant facts.
+
+## Key Numbers & Commitments
+Important amounts, dates, targets, notice periods, limits or obligations.
+
+## Risks / Watch Items
+Only evidence-based concerns, ambiguity, missing clarity or operational risk.
+If none are supported, say so.
+
+## Immediate Actions
+Prioritized actions clearly supported by the documents.
+
+## Questions Leadership Should Ask
+3-5 high-value follow-up questions that the documents leave open.
+
+SCOPE: {selected_pdf}
+
+PDF CONTENT:
+{context}
+"""
+    return ask_model(prompt) or "Could not generate the executive brief."
+
+
+def run_document_audit(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
+    if not scoped_chunks:
+        return "No document content is available for this scope."
+
+    context = "\n\n".join(
+        f'DOCUMENT: {c["file"]}\nPAGE: {c["page"]}\n{c["text"]}'
+        for c in scoped_chunks[:45]
+    )
+
+    prompt = f"""
+You are JAXOVIQ Document Audit AI.
+Audit the supplied business documents using ONLY their content.
+Do not give legal advice and do not invent missing facts.
+Reference evidence with [Document name, p.X].
+
+Produce:
+
+## Document Health
+- Purpose and apparent audience
+- Version/effective-date clarity
+- Ownership/responsibility clarity
+- Internal consistency observations
+
+## Missing or Unclear Information
+List only items that are genuinely absent, ambiguous, inconsistent or hard to act on.
+
+## Operational Risk Flags
+Rate each supported issue as High / Medium / Low and explain why in one sentence.
+
+## Improvement Opportunities
+Specific edits or additions that would make the document easier for staff or managers to use.
+
+## Audit Summary
+A short non-legal summary of the most important findings.
+
+SCOPE: {selected_pdf}
+
+PDF CONTENT:
+{context}
+"""
+    return ask_model(prompt) or "Could not complete the document audit."
+
+
 def clean_evidence_text(text, max_length=500):
     text = " ".join(text.split())
 
@@ -1825,6 +2059,12 @@ with st.sidebar:
                 st.session_state.risk_check_scope = None
                 st.session_state.deadline_result = None
                 st.session_state.deadline_scope = None
+                st.session_state.executive_brief = None
+                st.session_state.executive_brief_scope = None
+                st.session_state.document_audit = None
+                st.session_state.document_audit_scope = None
+
+                track_event("pdf_uploads", amount=len(pdf_names))
 
                 save_persistent_knowledge_base(
                     index,
@@ -1850,6 +2090,56 @@ with st.sidebar:
 
         if INDEX_FILE.exists() and CHUNKS_FILE.exists():
             st.caption("💾 Saved locally")
+
+    st.divider()
+
+    with st.expander("🔐 Admin Usage Stats", expanded=False):
+        admin_password = st.text_input(
+            "Admin password",
+            type="password",
+            key="admin_password_input",
+        )
+
+        # Set ADMIN_PASSWORD in Streamlit Secrets for production.
+        configured_password = ""
+        try:
+            configured_password = st.secrets.get("ADMIN_PASSWORD", "")
+        except Exception:
+            configured_password = ""
+
+        if configured_password:
+            if st.button("Unlock Admin", use_container_width=True):
+                st.session_state.admin_authenticated = (
+                    admin_password == configured_password
+                )
+                if not st.session_state.admin_authenticated:
+                    st.error("Incorrect admin password.")
+        else:
+            st.caption(
+                "Admin dashboard is ready. Add ADMIN_PASSWORD in Streamlit Secrets to unlock it."
+            )
+
+        if st.session_state.admin_authenticated:
+            st.session_state.admin_test_mode = st.checkbox(
+                "🧪 Admin Test Mode",
+                value=st.session_state.admin_test_mode,
+                help="When enabled, your own testing does not increase analytics counters.",
+            )
+
+            usage = load_analytics()
+            st.caption("Traffic Sources")
+            for source in ["Meta", "LinkedIn", "Instagram", "Google", "Direct", "Other"]:
+                st.write(f"{source}: **{usage['traffic_sources'].get(source, 0)}**")
+
+            a1, a2 = st.columns(2)
+            with a1:
+                st.metric("App Opens", usage.get("app_opens", 0))
+                st.metric("Questions", usage.get("questions", 0))
+                st.metric("Reports", usage.get("reports_exported", 0))
+            with a2:
+                st.metric("PDF Uploads", usage.get("pdf_uploads", 0))
+                st.metric("Analysis Runs", usage.get("analysis_runs", 0))
+                st.metric("Feedback", usage.get("feedback_count", 0))
 
     st.divider()
 
@@ -1889,7 +2179,8 @@ st.markdown(
         <div class="jaxoviq-subtitle">
             Turn business PDFs into a searchable knowledge base.
             Ask questions, verify answers with page-level evidence,
-            summarize documents, extract action items and export reports.
+            compare documents, detect review points, extract deadlines,
+            create executive briefs and export decision-ready reports.
         </div>
     </div>
     """,
@@ -2129,31 +2420,59 @@ if st.session_state.knowledge_base_ready:
         "using only your uploaded PDF evidence."
     )
 
-    business_col1, business_col2 = st.columns(2)
+    business_col1, business_col2, business_col3, business_col4 = st.columns(4)
 
     with business_col1:
+        executive_clicked = st.button(
+            "🧠 Executive Brief",
+            use_container_width=True,
+            help="Creates a leadership-ready snapshot with evidence, key numbers, risks and actions.",
+        )
+
+    with business_col2:
         risk_clicked = st.button(
             "🛡️ Contract / Policy Check",
             use_container_width=True,
             help="Flags practical risks, unclear wording, obligations and review points. Not legal advice.",
         )
 
-    with business_col2:
+    with business_col3:
         deadline_clicked = st.button(
-            "📅 Extract Deadlines & Key Terms",
+            "📅 Deadlines & Key Terms",
             use_container_width=True,
             help="Extracts dates, notice periods, renewals, payment terms and other important facts.",
         )
+
+    with business_col4:
+        audit_clicked = st.button(
+            "🔎 Document Audit",
+            use_container_width=True,
+            help="Checks clarity, missing information, operational risk flags and improvement opportunities.",
+        )
+
+    if executive_clicked:
+        with st.spinner("Building executive intelligence brief..."):
+            st.session_state.executive_brief = generate_executive_brief(selected_pdf)
+            st.session_state.executive_brief_scope = selected_pdf
+            track_event("analysis_runs")
 
     if risk_clicked:
         with st.spinner("Reviewing contract / policy terms..."):
             st.session_state.risk_check_result = run_risk_check(selected_pdf)
             st.session_state.risk_check_scope = selected_pdf
+            track_event("analysis_runs")
 
     if deadline_clicked:
         with st.spinner("Extracting deadlines and key terms..."):
             st.session_state.deadline_result = extract_deadlines_and_key_terms(selected_pdf)
             st.session_state.deadline_scope = selected_pdf
+            track_event("analysis_runs")
+
+    if audit_clicked:
+        with st.spinner("Auditing document quality and operational clarity..."):
+            st.session_state.document_audit = run_document_audit(selected_pdf)
+            st.session_state.document_audit_scope = selected_pdf
+            track_event("analysis_runs")
 
     if len(st.session_state.pdf_names) >= 2:
         st.markdown("#### 🔄 Compare Two Documents")
@@ -2195,8 +2514,24 @@ if st.session_state.knowledge_base_ready:
                         compare_b,
                     )
                     st.session_state.comparison_pair = (compare_a, compare_b)
+                    track_event("analysis_runs")
     else:
         st.info("Upload at least 2 PDFs to unlock Document Comparison.")
+
+    if (
+        st.session_state.executive_brief
+        and st.session_state.executive_brief_scope == selected_pdf
+    ):
+        with st.expander("🧠 Executive Brief", expanded=True):
+            st.markdown(st.session_state.executive_brief)
+
+    if (
+        st.session_state.document_audit
+        and st.session_state.document_audit_scope == selected_pdf
+    ):
+        with st.expander("🔎 Document Audit", expanded=True):
+            st.info("Operational document review only — not legal advice.")
+            st.markdown(st.session_state.document_audit)
 
     if (
         st.session_state.risk_check_result
@@ -2282,6 +2617,7 @@ if st.session_state.knowledge_base_ready:
             st.session_state.insights_scope = selected_pdf
 
     if export_clicked:
+        track_event("reports_exported")
         with st.spinner(
             "Preparing professional JAXOVIQ report..."
         ):
@@ -2464,6 +2800,7 @@ if question:
         st.warning("Please build the knowledge base first.")
 
     else:
+        track_event("questions")
         with st.spinner("Understanding your question..."):
             resolved_question = (
                 resolve_followup_question(question)
@@ -2580,3 +2917,28 @@ if question:
                             "confidence": confidence,
                         }
                     )
+
+
+# ============================================================
+# USER FEEDBACK
+# ============================================================
+
+with st.expander("💬 Give Feedback", expanded=False):
+    st.caption("Help improve JAXOVIQ. Feedback is saved privately with the app data.")
+    feedback_rating = st.select_slider(
+        "How useful was JAXOVIQ?",
+        options=[1, 2, 3, 4, 5],
+        value=5,
+        key="feedback_rating",
+    )
+    feedback_message = st.text_area(
+        "What worked well or what should improve?",
+        key="feedback_message",
+        placeholder="Example: The answer was useful, but I want a clearer comparison table...",
+    )
+    if st.button("Send Feedback", use_container_width=True, key="send_feedback_button"):
+        if feedback_message.strip():
+            save_feedback(feedback_rating, feedback_message)
+            st.success("Thank you — feedback saved.")
+        else:
+            st.warning("Please write a short feedback message first.")
