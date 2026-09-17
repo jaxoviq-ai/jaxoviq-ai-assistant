@@ -2442,150 +2442,149 @@ with st.sidebar:
 
     st.divider()
 
-    with st.expander("🔐 Admin Usage Stats", expanded=False):
-        admin_password = st.text_input(
-            "Admin password",
-            type="password",
-            key="admin_password_input",
+    st.markdown("### 🔐 Admin Usage Stats")
+    admin_password = st.text_input(
+        "Admin password",
+        type="password",
+        key="admin_password_input",
+    )
+
+    # Set ADMIN_PASSWORD in Streamlit Secrets for production.
+    configured_password = ""
+    try:
+        configured_password = st.secrets.get("ADMIN_PASSWORD", "")
+    except Exception:
+        configured_password = ""
+
+    if configured_password:
+        if st.button("Unlock Admin", use_container_width=True):
+            st.session_state.admin_authenticated = (
+                admin_password == configured_password
+            )
+            if not st.session_state.admin_authenticated:
+                st.error("Incorrect admin password.")
+    else:
+        st.caption(
+            "Admin dashboard is ready. Add ADMIN_PASSWORD in Streamlit Secrets to unlock it."
         )
 
-        # Set ADMIN_PASSWORD in Streamlit Secrets for production.
-        configured_password = ""
-        try:
-            configured_password = st.secrets.get("ADMIN_PASSWORD", "")
-        except Exception:
-            configured_password = ""
+    if st.session_state.admin_authenticated:
+        st.session_state.admin_test_mode = st.checkbox(
+            "🧪 Admin Test Mode",
+            value=st.session_state.admin_test_mode,
+            help="When enabled, your own testing does not increase analytics counters or history.",
+        )
 
-        if configured_password:
-            if st.button("Unlock Admin", use_container_width=True):
-                st.session_state.admin_authenticated = (
-                    admin_password == configured_password
+        usage = load_analytics()
+
+        st.markdown("### 📊 All-Time Totals")
+        a1, a2, a3 = st.columns(3)
+        with a1:
+            st.metric("App Opens", usage.get("app_opens", 0))
+            st.metric("Questions", usage.get("questions", 0))
+        with a2:
+            st.metric("PDF Uploads", usage.get("pdf_uploads", 0))
+            st.metric("Analysis Runs", usage.get("analysis_runs", 0))
+        with a3:
+            st.metric("Reports", usage.get("reports_exported", 0))
+            st.metric("Feedback", usage.get("feedback_count", 0))
+
+        st.markdown("### 🚦 Traffic Sources")
+        t1, t2, t3 = st.columns(3)
+        source_order = [
+            "Instagram",
+            "Meta",
+            "LinkedIn",
+            "Google",
+            "Direct",
+            "Other",
+        ]
+        source_columns = [t1, t2, t3]
+        for index, source in enumerate(source_order):
+            with source_columns[index % 3]:
+                st.metric(
+                    source,
+                    usage["traffic_sources"].get(source, 0),
                 )
-                if not st.session_state.admin_authenticated:
-                    st.error("Incorrect admin password.")
-        else:
-            st.caption(
-                "Admin dashboard is ready. Add ADMIN_PASSWORD in Streamlit Secrets to unlock it."
+
+        st.markdown("### 🕒 Activity History")
+        st.caption(
+            "Exact date/time uses Europe/Berlin time. Detailed history starts from the moment this tracking version is deployed; older totals are kept but cannot be back-filled with exact times."
+        )
+
+        f1, f2, f3 = st.columns(3)
+        with f1:
+            period_filter = st.selectbox(
+                "Period",
+                ["Today", "Yesterday", "Last 7 Days", "All Time"],
+                key="admin_history_period",
             )
-
-        if st.session_state.admin_authenticated:
-            st.session_state.admin_test_mode = st.checkbox(
-                "🧪 Admin Test Mode",
-                value=st.session_state.admin_test_mode,
-                help="When enabled, your own testing does not increase analytics counters or history.",
+        with f2:
+            source_filter = st.selectbox(
+                "Traffic source",
+                ["All", "Instagram", "Meta", "LinkedIn", "Google", "Direct", "Other"],
+                key="admin_history_source",
             )
-
-            usage = load_analytics()
-
-            st.markdown("### 📊 All-Time Totals")
-            a1, a2, a3 = st.columns(3)
-            with a1:
-                st.metric("App Opens", usage.get("app_opens", 0))
-                st.metric("Questions", usage.get("questions", 0))
-            with a2:
-                st.metric("PDF Uploads", usage.get("pdf_uploads", 0))
-                st.metric("Analysis Runs", usage.get("analysis_runs", 0))
-            with a3:
-                st.metric("Reports", usage.get("reports_exported", 0))
-                st.metric("Feedback", usage.get("feedback_count", 0))
-
-            st.markdown("### 🚦 Traffic Sources")
-            t1, t2, t3 = st.columns(3)
-            source_order = [
-                "Instagram",
-                "Meta",
-                "LinkedIn",
-                "Google",
-                "Direct",
-                "Other",
+        with f3:
+            event_options = [
+                "All",
+                "App Open",
+                "PDF Upload",
+                "Question Asked",
+                "Analysis Run",
+                "Report Exported",
+                "Feedback Sent",
             ]
-            source_columns = [t1, t2, t3]
-            for index, source in enumerate(source_order):
-                with source_columns[index % 3]:
-                    st.metric(
-                        source,
-                        usage["traffic_sources"].get(source, 0),
-                    )
-
-            st.markdown("### 🕒 Activity History")
-            st.caption(
-                "Exact date/time uses Europe/Berlin time. Detailed history starts from the moment this tracking version is deployed; older totals are kept but cannot be back-filled with exact times."
+            event_filter = st.selectbox(
+                "Event",
+                event_options,
+                key="admin_history_event",
             )
 
-            f1, f2, f3 = st.columns(3)
-            with f1:
-                period_filter = st.selectbox(
-                    "Period",
-                    ["Today", "Yesterday", "Last 7 Days", "All Time"],
-                    key="admin_history_period",
-                )
-            with f2:
-                source_filter = st.selectbox(
-                    "Traffic source",
-                    ["All", "Instagram", "Meta", "LinkedIn", "Google", "Direct", "Other"],
-                    key="admin_history_source",
-                )
-            with f3:
-                event_options = [
-                    "All",
-                    "App Open",
-                    "PDF Upload",
-                    "Question Asked",
-                    "Analysis Run",
-                    "Report Exported",
-                    "Feedback Sent",
-                ]
-                event_filter = st.selectbox(
-                    "Event",
-                    event_options,
-                    key="admin_history_event",
-                )
+        history_rows = filtered_event_history(
+            usage,
+            period=period_filter,
+            source_filter=source_filter,
+            event_filter=event_filter,
+        )
 
-            history_rows = filtered_event_history(
-                usage,
-                period=period_filter,
-                source_filter=source_filter,
-                event_filter=event_filter,
+        # Quick summary for the selected period.
+        h1, h2, h3, h4 = st.columns(4)
+        with h1:
+            st.metric(
+                "Events",
+                len(history_rows),
+            )
+        with h2:
+            st.metric(
+                "Opens",
+                sum(row["Event"] == "App Open" for row in history_rows),
+            )
+        with h3:
+            st.metric(
+                "Questions",
+                sum(row["Event"] == "Question Asked" for row in history_rows),
+            )
+        with h4:
+            st.metric(
+                "Analyses",
+                sum(row["Event"] == "Analysis Run" for row in history_rows),
             )
 
-            # Quick summary for the selected period.
-            h1, h2, h3, h4 = st.columns(4)
-            with h1:
-                st.metric(
-                    "Events",
-                    len(history_rows),
+        if history_rows:
+            st.dataframe(
+                history_rows[:500],
+                use_container_width=True,
+                hide_index=True,
+            )
+            if len(history_rows) > 500:
+                st.caption(
+                    f"Showing newest 500 of {len(history_rows)} matching events."
                 )
-            with h2:
-                st.metric(
-                    "Opens",
-                    sum(row["Event"] == "App Open" for row in history_rows),
-                )
-            with h3:
-                st.metric(
-                    "Questions",
-                    sum(row["Event"] == "Question Asked" for row in history_rows),
-                )
-            with h4:
-                st.metric(
-                    "Analyses",
-                    sum(row["Event"] == "Analysis Run" for row in history_rows),
-                )
-
-            if history_rows:
-                st.dataframe(
-                    history_rows[:500],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                if len(history_rows) > 500:
-                    st.caption(
-                        f"Showing newest 500 of {len(history_rows)} matching events."
-                    )
-            else:
-                st.info(
-                    "No tracked activity matches these filters yet."
-                )
-
+        else:
+            st.info(
+                "No tracked activity matches these filters yet."
+            )
     st.divider()
 
     col_a, col_b = st.columns(2)
