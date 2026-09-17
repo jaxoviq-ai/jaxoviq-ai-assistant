@@ -1958,7 +1958,7 @@ if admin_password == st.secrets.get("ADMIN_PASSWORD", "") and admin_password:
             st.metric("PDF Uploads", stats.get("pdf_uploads", 0))
             st.metric("Questions", stats.get("questions", 0))
 
-        elif admin_password:
+   elif admin_password:
             st.error("Wrong password")
     if st.session_state.knowledge_base_ready:
         st.success(
