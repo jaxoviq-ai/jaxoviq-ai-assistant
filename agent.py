@@ -213,6 +213,7 @@ defaults = {
     # Voice input
     "last_voice_hash": None,
     "last_voice_text": None,
+    "last_submitted_voice_hash": None,
 
     # Business analysis tools
     "comparison_result": None,
@@ -861,6 +862,49 @@ PDF CONTENT:
 
 
 # ============================================================
+# SMART RETRIEVAL QUERY EXPANSION
+# ============================================================
+
+def expand_retrieval_query(question):
+    """Add common business-document synonyms without changing user intent.
+
+    This improves semantic retrieval when a user says, for example,
+    "holidays" while the PDF uses "vacation days" or "annual leave".
+    """
+    if not question:
+        return question
+
+    q = question.strip()
+    q_lower = q.lower()
+
+    synonym_groups = [
+        (["holiday", "holidays"], "vacation days annual leave paid leave leave entitlement"),
+        (["vacation", "annual leave"], "holidays paid leave leave entitlement"),
+        (["sick", "illness", "medical leave"], "sick leave sickness absence medical certificate"),
+        (["salary", "wage", "pay"], "salary compensation wages remuneration payment"),
+        (["notice", "termination", "quit", "resign"], "notice period termination resignation employment end"),
+        (["renew", "renewal", "expire", "expiry"], "renewal expiry expiration end date extension"),
+        (["remote", "work from home", "home office"], "remote work work from home home office hybrid work"),
+        (["expense", "reimbursement", "claim"], "expense reimbursement claim receipt approval business expense"),
+        (["hours", "working time", "schedule"], "working hours schedule core hours weekly hours"),
+        (["probation", "trial period"], "probation probationary period trial period"),
+        (["benefit", "benefits"], "employee benefits entitlement allowance perks"),
+        (["deadline", "due date"], "deadline due date submission date time limit notice period"),
+    ]
+
+    extras = []
+    for triggers, expansion in synonym_groups:
+        if any(trigger in q_lower for trigger in triggers):
+            extras.append(expansion)
+
+    if extras:
+        return q + "\nRelevant equivalent terms: " + " ; ".join(dict.fromkeys(extras))
+
+    return q
+
+
+
+# ============================================================
 # RETRIEVAL
 # ============================================================
 
@@ -871,7 +915,8 @@ def retrieve_chunks(question, selected_pdf="All Documents"):
     ):
         return [], 0.0
 
-    query_embedding = get_embedding(question)
+    retrieval_query = expand_retrieval_query(question)
+    query_embedding = get_embedding(retrieval_query)
 
     if query_embedding is None:
         return [], 0.0
@@ -3092,18 +3137,20 @@ with st.expander("🎙️ Ask by Voice", expanded=False):
             st.session_state.last_voice_hash = voice_hash
             st.session_state.last_voice_text = transcribed_text
 
-            if transcribed_text:
-                voice_question = transcribed_text
-
         if st.session_state.last_voice_text:
             st.success(f'Heard: “{st.session_state.last_voice_text}”')
+            st.caption("Check the transcription, then press the button once to ask JAXOVIQ.")
             if st.button(
                 "🎙️ Ask This Voice Question",
                 type="primary",
                 use_container_width=True,
                 key="ask_voice_question_button",
             ):
-                voice_question = st.session_state.last_voice_text
+                if voice_hash != st.session_state.last_submitted_voice_hash:
+                    voice_question = st.session_state.last_voice_text
+                    st.session_state.last_submitted_voice_hash = voice_hash
+                else:
+                    st.info("This recording was already submitted. Record a new question to ask again.")
 
 typed_question = st.chat_input(
     "Ask a question about your PDFs..."
