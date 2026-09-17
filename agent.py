@@ -2,6 +2,7 @@ import io
 import json
 import time
 import html
+import hashlib
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,7 +34,7 @@ from reportlab.platypus import (
 # ============================================================
 # JAXOVIQ AI ASSISTANT
 # Professional Multi-PDF RAG Assistant
-# Client Demo Edition
+# Client Demo Edition + Voice Input
 # ============================================================
 
 client = OpenAI()
@@ -51,6 +52,7 @@ SOURCE_SCORE_GAP = 0.12
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 AI_MODEL = "gpt-5.6-luna"
+VOICE_MODEL = "gpt-4o-mini-transcribe"
 
 
 # ============================================================
@@ -207,6 +209,10 @@ defaults = {
     "suggested_questions": [],
     "suggestions_scope": None,
     "pending_question": None,
+
+    # Voice input
+    "last_voice_hash": None,
+    "last_voice_text": None,
 
     # Business analysis tools
     "comparison_result": None,
@@ -415,6 +421,36 @@ def ask_model(prompt):
             else:
                 st.error(f"AI error: {e}")
                 return None
+
+
+# ============================================================
+# VOICE INPUT / SPEECH-TO-TEXT
+# ============================================================
+
+def transcribe_voice(audio_file):
+    """Convert Streamlit microphone audio into text for JAXOVIQ Q&A."""
+    if audio_file is None:
+        return None
+
+    try:
+        audio_bytes = audio_file.getvalue()
+        if not audio_bytes:
+            return None
+
+        audio_buffer = io.BytesIO(audio_bytes)
+        audio_buffer.name = "jaxoviq_voice.wav"
+
+        transcript = client.audio.transcriptions.create(
+            model=VOICE_MODEL,
+            file=audio_buffer,
+        )
+
+        text = getattr(transcript, "text", "")
+        return text.strip() if text else None
+
+    except Exception as e:
+        st.error(f"Voice transcription error: {e}")
+        return None
 
 
 # ============================================================
@@ -3034,6 +3070,41 @@ for message in st.session_state.messages:
             )
 
 
+# Voice input: record a question, transcribe it, then send it through
+# the exact same grounded RAG pipeline as typed questions.
+voice_question = None
+
+with st.expander("🎙️ Ask by Voice", expanded=False):
+    st.caption("Record your question. JAXOVIQ converts it to text and searches only your uploaded documents.")
+    voice_audio = st.audio_input(
+        "Record a voice question",
+        key="jaxoviq_voice_audio",
+    )
+
+    if voice_audio is not None:
+        voice_bytes = voice_audio.getvalue()
+        voice_hash = hashlib.sha256(voice_bytes).hexdigest()
+
+        if voice_hash != st.session_state.last_voice_hash:
+            with st.spinner("Transcribing your voice question..."):
+                transcribed_text = transcribe_voice(voice_audio)
+
+            st.session_state.last_voice_hash = voice_hash
+            st.session_state.last_voice_text = transcribed_text
+
+            if transcribed_text:
+                voice_question = transcribed_text
+
+        if st.session_state.last_voice_text:
+            st.success(f'Heard: “{st.session_state.last_voice_text}”')
+            if st.button(
+                "🎙️ Ask This Voice Question",
+                type="primary",
+                use_container_width=True,
+                key="ask_voice_question_button",
+            ):
+                voice_question = st.session_state.last_voice_text
+
 typed_question = st.chat_input(
     "Ask a question about your PDFs..."
 )
@@ -3043,6 +3114,9 @@ question = None
 if st.session_state.pending_question:
     question = st.session_state.pending_question
     st.session_state.pending_question = None
+
+elif voice_question:
+    question = voice_question
 
 elif typed_question:
     question = typed_question
