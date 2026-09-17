@@ -222,6 +222,15 @@ defaults = {
     "document_audit": None,
     "document_audit_scope": None,
 
+    # Extreme intelligence
+    "conflict_scan": None,
+    "conflict_scan_scope": None,
+    "obligation_register": None,
+    "obligation_scope": None,
+    "decision_memo": None,
+    "decision_scope": None,
+    "full_scan_last_scope": None,
+
     # Admin / analytics
     "admin_authenticated": False,
     "admin_test_mode": False,
@@ -1531,6 +1540,141 @@ PDF CONTENT:
     return ask_model(prompt) or "Could not complete the document audit."
 
 
+def generate_obligation_register(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
+    if not scoped_chunks:
+        return "No document content is available for this scope."
+
+    context = "\n\n".join(
+        f'DOCUMENT: {c["file"]}\nPAGE: {c["page"]}\n{c["text"]}'
+        for c in scoped_chunks[:50]
+    )
+
+    prompt = f"""
+You are JAXOVIQ Obligation Intelligence.
+Use ONLY the supplied PDF content. Do not invent duties, deadlines or owners.
+Extract every material obligation, required action, approval, restriction or recurring duty.
+
+Return:
+
+# Obligation Register
+
+Use a Markdown table:
+| Priority | Owner / Responsible Party | Obligation / Required Action | Trigger / Deadline | Consequence or Dependency Stated in Document | Source |
+
+Rules:
+- Priority can be High / Medium / Low based only on operational importance evident in the text.
+- If owner, trigger, deadline or consequence is not stated, write "Not specified".
+- Source must include filename and page.
+- Do not give legal advice.
+
+## Unassigned / Unclear Obligations
+List obligations whose owner, deadline or process is unclear.
+
+SCOPE: {selected_pdf}
+
+PDF CONTENT:
+{context}
+"""
+    return ask_model(prompt) or "Could not generate the obligation register."
+
+
+def generate_decision_memo(selected_pdf="All Documents"):
+    scoped_chunks = get_scoped_chunks(selected_pdf)
+    if not scoped_chunks:
+        return "No document content is available for this scope."
+
+    context = "\n\n".join(
+        f'DOCUMENT: {c["file"]}\nPAGE: {c["page"]}\n{c["text"]}'
+        for c in scoped_chunks[:50]
+    )
+
+    prompt = f"""
+You are JAXOVIQ Decision Intelligence.
+Create a management-ready memo using ONLY the supplied PDF content.
+Never invent facts. Cite important evidence as [Document name, p.X].
+
+Return exactly:
+
+# Decision Memo
+
+## Situation
+What the documents establish in 3-5 concise bullets.
+
+## Decisions / Approvals Needed
+Only decisions that are genuinely suggested by gaps, obligations, deadlines or choices in the supplied documents.
+If none are evident, say "No explicit decision requirement found."
+
+## Evidence That Matters
+A concise table:
+| Evidence | Why It Matters | Source |
+
+## Risks of Inaction
+Only evidence-based operational consequences or unresolved issues. Do not invent consequences.
+
+## Recommended Next Actions
+Prioritized practical actions grounded in the documents. This is operational guidance, not legal advice.
+
+## Open Questions
+Questions the documents do not resolve.
+
+SCOPE: {selected_pdf}
+
+PDF CONTENT:
+{context}
+"""
+    return ask_model(prompt) or "Could not generate the decision memo."
+
+
+def scan_cross_document_conflicts():
+    if len(st.session_state.pdf_names) < 2:
+        return "Upload at least 2 PDFs to run a cross-document conflict scan."
+
+    context_parts = []
+    for pdf_name in st.session_state.pdf_names[:8]:
+        pdf_context = _document_context_for_analysis(pdf_name, max_chunks=22)
+        if pdf_context:
+            context_parts.append(pdf_context)
+
+    if len(context_parts) < 2:
+        return "Not enough readable document content is available for a conflict scan."
+
+    context = "\n\n===== NEXT DOCUMENT =====\n\n".join(context_parts)
+
+    prompt = f"""
+You are JAXOVIQ Cross-Document Conflict Intelligence.
+Analyze ONLY the supplied PDF content and detect contradictions, mismatched terms,
+duplicate rules with different values, inconsistent dates, conflicting responsibilities,
+or policies that could create operational confusion.
+
+Do NOT treat different topics as conflicts. Do NOT invent conflicts.
+
+Return:
+
+# Cross-Document Conflict Scan
+
+## Confirmed Conflicts
+Use a Markdown table:
+| Topic | Document / Page A | Statement A | Document / Page B | Statement B | Operational Impact |
+
+Only include a row when the supplied text clearly conflicts.
+If none are found, write "No confirmed conflicts found in supplied text."
+
+## Potential Inconsistencies to Verify
+Use this for wording that may conflict but cannot be confirmed from the supplied text.
+
+## Duplicate / Overlapping Rules
+List important topics covered by more than one document, even when consistent.
+
+## Highest-Priority Review Points
+3-5 evidence-based items for a human reviewer.
+
+PDF CONTENT:
+{context}
+"""
+    return ask_model(prompt) or "Could not complete the cross-document conflict scan."
+
+
 def clean_evidence_text(text, max_length=500):
     text = " ".join(text.split())
 
@@ -2063,6 +2207,13 @@ with st.sidebar:
                 st.session_state.executive_brief_scope = None
                 st.session_state.document_audit = None
                 st.session_state.document_audit_scope = None
+                st.session_state.conflict_scan = None
+                st.session_state.conflict_scan_scope = None
+                st.session_state.obligation_register = None
+                st.session_state.obligation_scope = None
+                st.session_state.decision_memo = None
+                st.session_state.decision_scope = None
+                st.session_state.full_scan_last_scope = None
 
                 track_event("pdf_uploads", amount=len(pdf_names))
 
@@ -2410,44 +2561,105 @@ if st.session_state.knowledge_base_ready:
 
 
 # ============================================================
-# BUSINESS ANALYSIS
+# JAXOVIQ INTELLIGENCE COMMAND CENTER
 # ============================================================
 
 if st.session_state.knowledge_base_ready:
-    st.subheader("⚡ Business Analysis")
+    st.subheader("⚡ JAXOVIQ Intelligence Command Center")
     st.caption(
-        "Compare documents, review contracts/policies, and extract deadlines "
-        "using only your uploaded PDF evidence."
+        "Executive intelligence, risk review, obligation extraction, conflict detection, "
+        "decision support and evidence-grounded document comparison."
     )
 
-    business_col1, business_col2, business_col3, business_col4 = st.columns(4)
+    # One-click scan for maximum demo impact.
+    full_scan_clicked = st.button(
+        "🚀 Run Full Intelligence Scan",
+        use_container_width=True,
+        type="primary",
+        help="Runs the main intelligence modules for the current scope. Multiple AI analyses may take a little time.",
+    )
 
-    with business_col1:
+    if full_scan_clicked:
+        with st.status("Running JAXOVIQ full intelligence scan...", expanded=True) as scan_status:
+            st.write("🧠 Building Executive Brief...")
+            st.session_state.executive_brief = generate_executive_brief(selected_pdf)
+            st.session_state.executive_brief_scope = selected_pdf
+
+            st.write("🛡️ Reviewing risks and policies...")
+            st.session_state.risk_check_result = run_risk_check(selected_pdf)
+            st.session_state.risk_check_scope = selected_pdf
+
+            st.write("📅 Extracting deadlines and key terms...")
+            st.session_state.deadline_result = extract_deadlines_and_key_terms(selected_pdf)
+            st.session_state.deadline_scope = selected_pdf
+
+            st.write("🔎 Auditing document quality...")
+            st.session_state.document_audit = run_document_audit(selected_pdf)
+            st.session_state.document_audit_scope = selected_pdf
+
+            st.write("📋 Building obligation register...")
+            st.session_state.obligation_register = generate_obligation_register(selected_pdf)
+            st.session_state.obligation_scope = selected_pdf
+
+            st.write("🧭 Building decision memo...")
+            st.session_state.decision_memo = generate_decision_memo(selected_pdf)
+            st.session_state.decision_scope = selected_pdf
+
+            if len(st.session_state.pdf_names) >= 2:
+                st.write("⚔️ Scanning cross-document conflicts...")
+                st.session_state.conflict_scan = scan_cross_document_conflicts()
+                st.session_state.conflict_scan_scope = "All Documents"
+
+            st.session_state.full_scan_last_scope = selected_pdf
+            track_event("analysis_runs")
+            scan_status.update(label="✅ Full intelligence scan complete", state="complete", expanded=False)
+
+    row1 = st.columns(4)
+    row2 = st.columns(3)
+
+    with row1[0]:
         executive_clicked = st.button(
             "🧠 Executive Brief",
             use_container_width=True,
-            help="Creates a leadership-ready snapshot with evidence, key numbers, risks and actions.",
+            help="Leadership-ready snapshot with evidence, numbers, risks and actions.",
         )
-
-    with business_col2:
+    with row1[1]:
         risk_clicked = st.button(
             "🛡️ Contract / Policy Check",
             use_container_width=True,
-            help="Flags practical risks, unclear wording, obligations and review points. Not legal advice.",
+            help="Flags practical risks, ambiguity, obligations and review points. Not legal advice.",
         )
-
-    with business_col3:
+    with row1[2]:
         deadline_clicked = st.button(
             "📅 Deadlines & Key Terms",
             use_container_width=True,
-            help="Extracts dates, notice periods, renewals, payment terms and other important facts.",
+            help="Extracts dates, notice periods, renewals, money terms, limits and other key facts.",
         )
-
-    with business_col4:
+    with row1[3]:
         audit_clicked = st.button(
             "🔎 Document Audit",
             use_container_width=True,
             help="Checks clarity, missing information, operational risk flags and improvement opportunities.",
+        )
+
+    with row2[0]:
+        obligations_clicked = st.button(
+            "📋 Obligation Register",
+            use_container_width=True,
+            help="Turns document duties, approvals, restrictions and deadlines into an actionable register.",
+        )
+    with row2[1]:
+        decision_clicked = st.button(
+            "🧭 Decision Memo",
+            use_container_width=True,
+            help="Creates a management-ready memo with evidence, open questions and grounded next actions.",
+        )
+    with row2[2]:
+        conflict_clicked = st.button(
+            "⚔️ Conflict Scanner",
+            use_container_width=True,
+            disabled=len(st.session_state.pdf_names) < 2,
+            help="Checks multiple PDFs for contradictory dates, rules, amounts, responsibilities and policy terms.",
         )
 
     if executive_clicked:
@@ -2474,8 +2686,27 @@ if st.session_state.knowledge_base_ready:
             st.session_state.document_audit_scope = selected_pdf
             track_event("analysis_runs")
 
+    if obligations_clicked:
+        with st.spinner("Building obligation register..."):
+            st.session_state.obligation_register = generate_obligation_register(selected_pdf)
+            st.session_state.obligation_scope = selected_pdf
+            track_event("analysis_runs")
+
+    if decision_clicked:
+        with st.spinner("Building management decision memo..."):
+            st.session_state.decision_memo = generate_decision_memo(selected_pdf)
+            st.session_state.decision_scope = selected_pdf
+            track_event("analysis_runs")
+
+    if conflict_clicked:
+        with st.spinner("Scanning documents for conflicts and inconsistencies..."):
+            st.session_state.conflict_scan = scan_cross_document_conflicts()
+            st.session_state.conflict_scan_scope = "All Documents"
+            track_event("analysis_runs")
+
+    # ---------- Robust side-by-side comparison ----------
     if len(st.session_state.pdf_names) >= 2:
-        st.markdown("#### 🔄 Compare Two Documents")
+        st.markdown("### 🔄 Compare Two Documents")
         compare_col1, compare_col2, compare_col3 = st.columns([2, 2, 1])
 
         with compare_col1:
@@ -2499,31 +2730,61 @@ if st.session_state.knowledge_base_ready:
             st.write("")
             st.write("")
             compare_clicked = st.button(
-                "Compare",
+                "⚡ Compare",
                 use_container_width=True,
                 type="primary",
+                key="extreme_compare_button",
             )
 
         if compare_clicked:
             if compare_a == compare_b:
                 st.warning("Choose two different documents to compare.")
             else:
-                with st.spinner("Comparing documents..."):
-                    st.session_state.comparison_result = compare_documents(
-                        compare_a,
-                        compare_b,
-                    )
+                with st.spinner(f"Comparing {compare_a} with {compare_b}..."):
+                    comparison = compare_documents(compare_a, compare_b)
+
+                if comparison and comparison.strip():
+                    st.session_state.comparison_result = comparison
                     st.session_state.comparison_pair = (compare_a, compare_b)
                     track_event("analysis_runs")
-    else:
-        st.info("Upload at least 2 PDFs to unlock Document Comparison.")
+                    st.success("✅ Comparison complete — result shown directly below.")
+                else:
+                    st.session_state.comparison_result = None
+                    st.session_state.comparison_pair = None
+                    st.error(
+                        "Comparison could not be generated. Both PDFs were loaded, but the AI returned no result. "
+                        "Try again once; if it repeats, rebuild the knowledge base."
+                    )
 
+        # Keep comparison output right under the Compare controls so it is impossible to miss.
+        if st.session_state.comparison_result and st.session_state.comparison_pair:
+            pair = st.session_state.comparison_pair
+            st.markdown(f"### 🔄 Comparison Result: {pair[0]} ↔ {pair[1]}")
+            st.markdown(st.session_state.comparison_result)
+    else:
+        st.info("Upload at least 2 PDFs to unlock Document Comparison and Conflict Scanner.")
+
+    # ---------- Intelligence outputs ----------
     if (
         st.session_state.executive_brief
         and st.session_state.executive_brief_scope == selected_pdf
     ):
         with st.expander("🧠 Executive Brief", expanded=True):
             st.markdown(st.session_state.executive_brief)
+
+    if (
+        st.session_state.decision_memo
+        and st.session_state.decision_scope == selected_pdf
+    ):
+        with st.expander("🧭 Decision Memo", expanded=True):
+            st.markdown(st.session_state.decision_memo)
+
+    if (
+        st.session_state.obligation_register
+        and st.session_state.obligation_scope == selected_pdf
+    ):
+        with st.expander("📋 Obligation Register", expanded=True):
+            st.markdown(st.session_state.obligation_register)
 
     if (
         st.session_state.document_audit
@@ -2551,13 +2812,9 @@ if st.session_state.knowledge_base_ready:
         with st.expander("📅 Deadlines & Key Terms", expanded=True):
             st.markdown(st.session_state.deadline_result)
 
-    if st.session_state.comparison_result and st.session_state.comparison_pair:
-        pair = st.session_state.comparison_pair
-        with st.expander(
-            f"🔄 Comparison: {pair[0]} ↔ {pair[1]}",
-            expanded=True,
-        ):
-            st.markdown(st.session_state.comparison_result)
+    if st.session_state.conflict_scan:
+        with st.expander("⚔️ Cross-Document Conflict Scan", expanded=True):
+            st.markdown(st.session_state.conflict_scan)
 
     st.divider()
 
